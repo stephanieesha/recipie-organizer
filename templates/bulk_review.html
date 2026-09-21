@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Review Import - Recipe Organizer</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #8B7099; color: #161A1F; }
+    header { padding: 20px 32px; background: #161A1F; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 20px; }
+    header nav a { color: #DCCFE0; text-decoration: none; font-size: 13px; margin-left: 16px; }
+    .container { max-width: 760px; margin: 24px auto; padding: 0 24px; }
+    .card { background: #F3F1EA; border-radius: 10px; padding: 22px; margin-bottom: 20px; }
+    .card h2 { margin-top: 0; font-size: 16px; color: #161A1F; }
+    .intro { font-size: 13px; color: #6B5F70; margin-bottom: 16px; }
+    select { padding: 7px; border: 1px solid #D8C9DC; border-radius: 6px; font-size: 12px; background: #fff; color: #161A1F; }
+    button { padding: 9px 16px; border: none; border-radius: 20px; background: #161A1F; color: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #333; }
+    .recipe-row { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #E4DCE8; font-size: 13px; gap: 12px; }
+    .recipe-thumb { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: #E4DCE8; }
+    .recipe-thumb-placeholder { width: 48px; height: 48px; border-radius: 6px; background: #E4DCE8; flex-shrink: 0; }
+    .recipe-info { flex: 1; min-width: 0; }
+    .recipe-title { font-weight: 500; }
+    .recipe-meta { color: #8A7E8F; font-size: 11px; }
+    .status-tag { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+    .status-extracted { background: #DEE9DC; color: #2E4A2E; }
+    .status-pending { background: #EFE6F2; color: #5A3E68; }
+    .status-needs_manual { background: #F0E4CF; color: #6B4E1F; }
+    .assigned-tag { font-size: 10px; color: #2E4A2E; margin-left: 6px; }
+    .empty-state { color: #6B5F70; font-size: 13px; text-align: center; padding: 20px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Recipe Organizer</h1>
+    <nav><a href="/">Recipes</a><a href="/categories">Categories</a></nav>
+  </header>
+  <div class="container">
+
+    <div class="card">
+      <h2>Review your import</h2>
+      <p class="intro">Assign a category to each recipe below before they land in your main list, so they don't end up mixed in uncategorized.</p>
+      <div id="reviewList"></div>
+      <div style="margin-top:16px;">
+        <a href="/"><button>Done - go to recipes</button></a>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const RECIPE_IDS = (params.get('ids') || '').split(',').filter(Boolean).map(Number);
+    let categories = [];
+
+    async function loadCategories() {
+      const res = await fetch('/api/categories');
+      categories = await res.json();
+    }
+
+    function categoryOptions(selectedId) {
+      let html = '<option value="">No category</option>';
+      categories.forEach((c) => {
+        html += `<option value="${c.id}" ${selectedId === c.id ? 'selected' : ''}>${c.name}</option>`;
+      });
+      return html;
+    }
+
+    async function loadReviewList() {
+      const list = document.getElementById('reviewList');
+
+      if (RECIPE_IDS.length === 0) {
+        list.innerHTML = '<p class="empty-state">Nothing to review.</p>';
+        return;
+      }
+
+      const recipes = await Promise.all(
+        RECIPE_IDS.map((id) => fetch(`/api/recipes/${id}`).then((r) => r.ok ? r.json() : null))
+      );
+
+      list.innerHTML = recipes.filter(Boolean).map((r) => {
+        const title = r.title || (r.status === 'pending' ? 'Awaiting caption' : 'Untitled');
+        const thumb = r.thumbnail_url
+          ? `<img src="${r.thumbnail_url}" class="recipe-thumb" alt="">`
+          : `<div class="recipe-thumb-placeholder"></div>`;
+        return `
+          <div class="recipe-row">
+            ${thumb}
+            <div class="recipe-info">
+              <div class="recipe-title">${title}</div>
+              <div class="recipe-meta">${r.platform} &middot; <span class="status-tag status-${r.status}">${r.status.replace('_', ' ')}</span><span class="assigned-tag" id="assigned-${r.id}"></span></div>
+            </div>
+            <select onchange="assignCategory(${r.id}, this.value)">
+              ${categoryOptions(r.category_id)}
+            </select>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function assignCategory(recipeId, categoryId) {
+      const res = await fetch(`/api/recipes/${recipeId}/category`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category_id: categoryId || null }),
+      });
+      const tag = document.getElementById(`assigned-${recipeId}`);
+      if (res.ok) {
+        tag.textContent = 'Saved';
+        setTimeout(() => { tag.textContent = ''; }, 1500);
+      } else {
+        tag.textContent = 'Could not save';
+      }
+    }
+
+    (async function init() {
+      await loadCategories();
+      await loadReviewList();
+    })();
+  </script>
+</body>
+</html>

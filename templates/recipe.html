@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Recipe - Recipe Organizer</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #8B7099; color: #161A1F; }
+    header { padding: 20px 32px; background: #161A1F; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 20px; }
+    header a { color: #DCCFE0; text-decoration: none; font-size: 13px; }
+    .container { max-width: 640px; margin: 24px auto; padding: 0 24px; }
+    .card { background: #F3F1EA; border-radius: 10px; padding: 24px; margin-bottom: 20px; }
+    input, textarea { padding: 9px; border: 1px solid #D8C9DC; border-radius: 6px; font-size: 13px; width: 100%; background: #fff; color: #161A1F; font-family: inherit; box-sizing: border-box; margin-bottom: 8px; }
+    textarea { min-height: 50px; resize: vertical; }
+    button { padding: 9px 16px; border: none; border-radius: 20px; background: #161A1F; color: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #333; }
+    button.small { padding: 5px 12px; font-size: 12px; }
+    button.secondary { background: #6B5F70; }
+    .info-box { background: #EFE6F2; border: 1px solid #D8C9DC; color: #5A3E68; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 14px; }
+    .recipe-title { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+    .recipe-hero-image { width: 100%; max-height: 320px; object-fit: cover; border-radius: 8px; margin-bottom: 16px; display: block; }
+    .source-link { font-size: 12px; color: #6B4F78; margin-bottom: 18px; display: block; }
+    .section-label { font-size: 12px; font-weight: 600; color: #6B5F70; text-transform: uppercase; letter-spacing: 0.04em; margin: 18px 0 8px; }
+    ul.ingredients, ol.directions { padding-left: 20px; margin: 0; }
+    ul.ingredients li, ol.directions li { margin-bottom: 6px; font-size: 14px; line-height: 1.5; }
+    .ingredient-edit-row, .direction-edit-row { display: flex; gap: 6px; margin-bottom: 6px; }
+    .ingredient-edit-row input, .direction-edit-row input { margin-bottom: 0; }
+    .remove-line { background: #8A4E6B; padding: 6px 10px; font-size: 11px; }
+    .add-line { background: #6B5F70; padding: 6px 12px; font-size: 12px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Recipe Organizer</h1>
+    <a href="/">All recipes</a>
+  </header>
+  <div class="container">
+    <div class="card" id="recipeCard"></div>
+  </div>
+
+  <script>
+    const RECIPE_ID = {{ recipe_id }};
+    let currentRecipe = null;
+    let editMode = false;
+
+    async function loadRecipe() {
+      const res = await fetch(`/api/recipes/${RECIPE_ID}`);
+      if (!res.ok) {
+        document.getElementById('recipeCard').innerHTML = '<p>Recipe not found.</p>';
+        return;
+      }
+      currentRecipe = await res.json();
+      render();
+    }
+
+    function render() {
+      const card = document.getElementById('recipeCard');
+      const r = currentRecipe;
+
+      if (editMode) {
+        renderEditForm();
+        return;
+      }
+
+      let html = '';
+      if (r.status === 'needs_manual') {
+        html += `<div class="info-box">No recipe could be extracted automatically for this one${r.extraction_message ? ': ' + r.extraction_message : ''}. Add it manually below.</div>`;
+      } else if (r.status === 'pending') {
+        html += `<div class="info-box">Still waiting on a caption - go back to the list and add one.</div>`;
+      }
+
+      if (r.thumbnail_url) {
+        html += `<img src="${r.thumbnail_url}" class="recipe-hero-image" alt="">`;
+      }
+
+      html += `<h2 class="recipe-title">${r.title || 'Untitled recipe'}</h2>`;
+      html += `<a href="${r.source_url}" target="_blank" class="source-link">View original on ${r.platform}</a>`;
+
+      html += '<div class="section-label">Ingredients</div>';
+      html += r.ingredients.length
+        ? `<ul class="ingredients">${r.ingredients.map((i) => `<li>${i}</li>`).join('')}</ul>`
+        : '<p style="color:#8A7E8F;font-size:13px;">None yet.</p>';
+
+      html += '<div class="section-label">Directions</div>';
+      html += r.directions.length
+        ? `<ol class="directions">${r.directions.map((d) => `<li>${d}</li>`).join('')}</ol>`
+        : '<p style="color:#8A7E8F;font-size:13px;">None yet.</p>';
+
+      if (r.caption_raw) {
+        html += `<div class="section-label">Original caption</div><p style="font-size:12px;color:#8A7E8F;white-space:pre-wrap;">${r.caption_raw}</p>`;
+      }
+
+      html += `<div style="margin-top:20px;"><button onclick="enterEditMode()">Edit</button></div>`;
+
+      card.innerHTML = html;
+    }
+
+    function enterEditMode() {
+      editMode = true;
+      render();
+    }
+
+    function renderEditForm() {
+      const card = document.getElementById('recipeCard');
+      const r = currentRecipe;
+      const ingredients = r.ingredients.length ? r.ingredients : [''];
+      const directions = r.directions.length ? r.directions : [''];
+
+      let html = `<input type="text" id="editTitle" value="${(r.title || '').replace(/"/g, '&quot;')}" placeholder="Recipe title" />`;
+
+      html += '<div class="section-label">Ingredients</div><div id="ingredientRows">';
+      ingredients.forEach((ing) => {
+        html += `<div class="ingredient-edit-row"><input type="text" class="ing-input" value="${ing.replace(/"/g, '&quot;')}" /><button class="remove-line" onclick="removeRow(this)">Remove</button></div>`;
+      });
+      html += '</div><button class="add-line" onclick="addRow(\'ingredientRows\', \'ing-input\', \'ingredient-edit-row\')">Add ingredient</button>';
+
+      html += '<div class="section-label">Directions</div><div id="directionRows">';
+      directions.forEach((dir) => {
+        html += `<div class="direction-edit-row"><input type="text" class="dir-input" value="${dir.replace(/"/g, '&quot;')}" /><button class="remove-line" onclick="removeRow(this)">Remove</button></div>`;
+      });
+      html += '</div><button class="add-line" onclick="addRow(\'directionRows\', \'dir-input\', \'direction-edit-row\')">Add step</button>';
+
+      html += `<div style="margin-top:20px; display:flex; gap:8px;"><button onclick="saveEdit()">Save</button><button class="secondary" onclick="cancelEdit()">Cancel</button></div>`;
+
+      card.innerHTML = html;
+    }
+
+    function addRow(containerId, inputClass, rowClass) {
+      const container = document.getElementById(containerId);
+      const div = document.createElement('div');
+      div.className = rowClass;
+      div.innerHTML = `<input type="text" class="${inputClass}" /><button class="remove-line" onclick="removeRow(this)">Remove</button>`;
+      container.appendChild(div);
+    }
+
+    function removeRow(btn) {
+      btn.parentElement.remove();
+    }
+
+    async function saveEdit() {
+      const title = document.getElementById('editTitle').value.trim();
+      if (!title) {
+        alert('Enter a title first.');
+        return;
+      }
+      const ingredients = [...document.querySelectorAll('.ing-input')].map((i) => i.value.trim()).filter(Boolean);
+      const directions = [...document.querySelectorAll('.dir-input')].map((i) => i.value.trim()).filter(Boolean);
+
+      const res = await fetch(`/api/recipes/${RECIPE_ID}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, ingredients, directions }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(data.error || 'Could not save.');
+        return;
+      }
+
+      currentRecipe = data;
+      editMode = false;
+      render();
+    }
+
+    function cancelEdit() {
+      editMode = false;
+      render();
+    }
+
+    loadRecipe();
+  </script>
+</body>
+</html>

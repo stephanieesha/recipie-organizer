@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Category - Recipe Organizer</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #8B7099; color: #161A1F; }
+    header { padding: 20px 32px; background: #161A1F; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 20px; }
+    header nav a { color: #DCCFE0; text-decoration: none; font-size: 13px; margin-left: 16px; }
+    .container { max-width: 760px; margin: 24px auto; padding: 0 24px; }
+    .card { background: #F3F1EA; border-radius: 10px; padding: 22px; margin-bottom: 20px; }
+    .card h2 { margin-top: 0; font-size: 16px; color: #161A1F; }
+    .form-row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    input, textarea { padding: 9px; border: 1px solid #D8C9DC; border-radius: 6px; font-size: 13px; flex: 1; min-width: 150px; background: #fff; color: #161A1F; font-family: inherit; }
+    textarea { width: 100%; min-height: 80px; resize: vertical; }
+    button { padding: 9px 16px; border: none; border-radius: 20px; background: #161A1F; color: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #333; }
+    .error-box { background: #F4DEDC; border: 1px solid #DDB3AE; color: #7A2E24; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+    .success-box { background: #DEE9DC; border: 1px solid #B3C9AE; color: #2E4A2E; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+    .info-box { background: #EFE6F2; border: 1px solid #D8C9DC; color: #5A3E68; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+    .caption-prompt { background: #fff; border-radius: 8px; padding: 12px; margin-top: 8px; }
+
+    /* Full-width grid section - deliberately breaks out of the centered
+       .container above, spanning the page's whole margin per request. */
+    .grid-section { width: 100%; padding: 0 24px; margin-bottom: 40px; box-sizing: border-box; }
+    .grid-section h2 { color: #fff; font-size: 18px; margin-bottom: 16px; }
+    .recipe-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; }
+    .grid-cell { cursor: pointer; }
+    .grid-thumb { width: 100%; aspect-ratio: 1; border-radius: 8px; object-fit: cover; background: #F3F1EA; display: block; }
+    .grid-thumb-placeholder { width: 100%; aspect-ratio: 1; border-radius: 8px; background: #F3F1EA; }
+    .grid-name { color: #fff; font-size: 12px; margin-top: 6px; line-height: 1.3; }
+    .empty-state { color: #EFE6F2; font-size: 13px; text-align: center; padding: 20px 0; }
+
+    @media (max-width: 900px) {
+      .recipe-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 500px) {
+      .recipe-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Recipe Organizer</h1>
+    <nav><a href="/">Recipes</a><a href="/categories">Categories</a></nav>
+  </header>
+
+  <div class="container">
+    <div class="card">
+      <h2 id="categoryTitle">Add a recipe to this category</h2>
+      <div id="addMessage"></div>
+      <div class="form-row">
+        <input type="text" id="urlInput" placeholder="Paste an Instagram or TikTok link" />
+        <button onclick="addRecipe()">Add</button>
+      </div>
+
+      <div id="captionPrompt" style="display:none;" class="caption-prompt">
+        <p style="font-size:13px; margin:0 0 8px;">Instagram links need the caption pasted in manually - copy it from the app and paste it here:</p>
+        <textarea id="captionInput" placeholder="Paste the post's caption text..."></textarea>
+        <button onclick="submitCaption()" style="margin-top:8px;">Extract recipe</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-section">
+    <h2 id="gridHeading">Recipes</h2>
+    <div id="recipeGrid"></div>
+  </div>
+
+  <script>
+    const CATEGORY_ID = {{ category_id }};
+    let pendingCaptionRecipeId = null;
+
+    async function loadCategory() {
+      const res = await fetch(`/api/categories`);
+      const categories = await res.json();
+      const category = categories.find((c) => c.id === CATEGORY_ID);
+      if (category) {
+        document.getElementById('categoryTitle').textContent = `Add a recipe to "${category.name}"`;
+        document.getElementById('gridHeading').textContent = category.name;
+      }
+    }
+
+    async function loadGrid() {
+      const res = await fetch(`/api/categories/${CATEGORY_ID}/recipes`);
+      const recipes = await res.json();
+      const grid = document.getElementById('recipeGrid');
+
+      if (!res.ok || recipes.length === 0) {
+        grid.innerHTML = '<p class="empty-state">No recipes in this category yet.</p>';
+        return;
+      }
+
+      grid.innerHTML = '<div class="recipe-grid">' + recipes.map((r) => {
+        const title = r.title || (r.status === 'pending' ? 'Awaiting caption' : 'Untitled');
+        const thumb = r.thumbnail_url
+          ? `<img src="${r.thumbnail_url}" class="grid-thumb" alt="">`
+          : `<div class="grid-thumb-placeholder"></div>`;
+        return `
+          <div class="grid-cell" onclick="window.location.href='/recipes/${r.id}'">
+            ${thumb}
+            <div class="grid-name">${title}</div>
+          </div>
+        `;
+      }).join('') + '</div>';
+    }
+
+    async function addRecipe() {
+      const messageBox = document.getElementById('addMessage');
+      const urlInput = document.getElementById('urlInput');
+      messageBox.innerHTML = '';
+      document.getElementById('captionPrompt').style.display = 'none';
+
+      if (!urlInput.value.trim()) {
+        messageBox.innerHTML = '<div class="error-box">Paste a link first.</div>';
+        return;
+      }
+
+      messageBox.innerHTML = '<p style="color:#6B5F70;font-size:13px;">Adding...</p>';
+
+      const res = await fetch('/api/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: urlInput.value.trim(), category_id: CATEGORY_ID }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        messageBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+        return;
+      }
+
+      if (data.needs_caption) {
+        messageBox.innerHTML = '';
+        pendingCaptionRecipeId = data.id;
+        document.getElementById('captionPrompt').style.display = 'block';
+      } else if (data.status === 'extracted') {
+        messageBox.innerHTML = `<div class="success-box">Added "${data.title}".</div>`;
+      } else if (data.status === 'needs_manual') {
+        messageBox.innerHTML = `<div class="info-box">${data.extraction_message || 'No recipe found in this caption.'} You can edit it manually from the recipe page.</div>`;
+      }
+
+      urlInput.value = '';
+      loadGrid();
+    }
+
+    async function submitCaption() {
+      const messageBox = document.getElementById('addMessage');
+      const captionInput = document.getElementById('captionInput');
+
+      if (!captionInput.value.trim()) {
+        messageBox.innerHTML = '<div class="error-box">Paste the caption text first.</div>';
+        return;
+      }
+
+      const res = await fetch(`/api/recipes/${pendingCaptionRecipeId}/caption`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caption: captionInput.value.trim() }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        messageBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+        return;
+      }
+
+      if (data.status === 'extracted') {
+        messageBox.innerHTML = `<div class="success-box">Added "${data.title}".</div>`;
+      } else {
+        messageBox.innerHTML = `<div class="info-box">${data.extraction_message || 'No recipe found in this caption.'} You can edit it manually from the recipe page.</div>`;
+      }
+
+      document.getElementById('captionPrompt').style.display = 'none';
+      captionInput.value = '';
+      pendingCaptionRecipeId = null;
+      loadGrid();
+    }
+
+    loadCategory();
+    loadGrid();
+  </script>
+</body>
+</html>

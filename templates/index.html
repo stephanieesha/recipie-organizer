@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Recipe Organizer</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #8B7099; color: #161A1F; }
+    header { padding: 20px 32px; background: #161A1F; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 20px; }
+    header nav a { color: #DCCFE0; text-decoration: none; font-size: 13px; margin-left: 16px; }
+    .container { max-width: 760px; margin: 24px auto; padding: 0 24px; }
+    .card { background: #F3F1EA; border-radius: 10px; padding: 22px; margin-bottom: 20px; }
+    .card h2 { margin-top: 0; font-size: 16px; color: #161A1F; }
+    .form-row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    input, textarea, select { padding: 9px; border: 1px solid #D8C9DC; border-radius: 6px; font-size: 13px; flex: 1; min-width: 150px; background: #fff; color: #161A1F; font-family: inherit; }
+    textarea { width: 100%; min-height: 80px; resize: vertical; }
+    button { padding: 9px 16px; border: none; border-radius: 20px; background: #161A1F; color: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #333; }
+    button.danger { background: #8A4E6B; padding: 5px 10px; font-size: 12px; }
+    button.small { padding: 5px 12px; font-size: 12px; }
+    .error-box { background: #F4DEDC; border: 1px solid #DDB3AE; color: #7A2E24; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+    .success-box { background: #DEE9DC; border: 1px solid #B3C9AE; color: #2E4A2E; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+    .info-box { background: #EFE6F2; border: 1px solid #D8C9DC; color: #5A3E68; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+    .bulk-toggle { font-size: 12px; color: #6B4F78; text-decoration: underline; cursor: pointer; margin-top: 6px; display: inline-block; }
+    .bulk-section { display: none; border-top: 1px solid #E4DCE8; margin-top: 14px; padding-top: 14px; }
+    .recipe-row { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #E4DCE8; font-size: 13px; gap: 12px; }
+    .recipe-thumb { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: #E4DCE8; }
+    .recipe-thumb-placeholder { width: 48px; height: 48px; border-radius: 6px; background: #E4DCE8; flex-shrink: 0; }
+    .recipe-info { flex: 1; min-width: 0; }
+    .recipe-title { font-weight: 500; }
+    .recipe-meta { color: #8A7E8F; font-size: 11px; }
+    .status-tag { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+    .status-extracted { background: #DEE9DC; color: #2E4A2E; }
+    .status-pending { background: #EFE6F2; color: #5A3E68; }
+    .status-needs_manual { background: #F0E4CF; color: #6B4E1F; }
+    .recipe-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+    .empty-state { color: #6B5F70; font-size: 13px; text-align: center; padding: 20px 0; }
+    .caption-prompt { background: #fff; border-radius: 8px; padding: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Recipe Organizer</h1>
+    <nav><a href="/categories">Categories</a></nav>
+  </header>
+  <div class="container">
+
+    <div class="card">
+      <h2>Add a recipe</h2>
+      <div id="addMessage"></div>
+      <div class="form-row">
+        <input type="text" id="urlInput" placeholder="Paste an Instagram or TikTok link" />
+        <select id="categorySelect"><option value="">No category</option></select>
+        <button onclick="addRecipe()">Add</button>
+      </div>
+
+      <div id="captionPrompt" style="display:none;" class="caption-prompt">
+        <p style="font-size:13px; margin:0 0 8px;">Instagram links need the caption pasted in manually (see README for why) - copy it from the app and paste it here:</p>
+        <textarea id="captionInput" placeholder="Paste the post's caption text..."></textarea>
+        <button onclick="submitCaption()" style="margin-top:8px;">Extract recipe</button>
+      </div>
+
+      <span class="bulk-toggle" onclick="toggleBulk()">Have a backlog? Bulk import from your data export</span>
+      <div class="bulk-section" id="bulkSection">
+        <div id="bulkMessage"></div>
+        <div class="form-row">
+          <input type="file" id="bulkFileInput" accept=".json,.txt,.html" />
+          <button onclick="bulkImport()">Import</button>
+        </div>
+        <p style="font-size:11px; color:#8A7E8F;">Upload your Instagram or TikTok data export file. TikTok links are processed automatically; Instagram links are added but will need their captions pasted in afterward.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Your recipes</h2>
+      <div id="recipeList"></div>
+    </div>
+
+  </div>
+
+  <script>
+    let pendingCaptionRecipeId = null;
+
+    async function loadCategoriesIntoSelect() {
+      const res = await fetch('/api/categories');
+      const categories = await res.json();
+      const select = document.getElementById('categorySelect');
+      select.innerHTML = '<option value="">No category</option>' +
+        categories.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
+    }
+
+    async function loadRecipes() {
+      const res = await fetch('/api/recipes');
+      const recipes = await res.json();
+      const list = document.getElementById('recipeList');
+
+      if (recipes.length === 0) {
+        list.innerHTML = '<p class="empty-state">No recipes added yet.</p>';
+        return;
+      }
+
+      list.innerHTML = recipes.map((r) => {
+        const title = r.title || (r.status === 'pending' ? 'Awaiting caption' : 'Untitled');
+        const thumb = r.thumbnail_url
+          ? `<img src="${r.thumbnail_url}" class="recipe-thumb" alt="">`
+          : `<div class="recipe-thumb-placeholder"></div>`;
+        return `
+          <div class="recipe-row">
+            ${thumb}
+            <div class="recipe-info">
+              <div class="recipe-title">${title}</div>
+              <div class="recipe-meta">${r.platform}${r.category_name ? ' &middot; ' + r.category_name : ''} &middot; <span class="status-tag status-${r.status}">${r.status.replace('_', ' ')}</span></div>
+            </div>
+            <div class="recipe-actions">
+              ${r.status === 'pending' ? `<button class="small" onclick="promptCaption(${r.id})">Add caption</button>` : `<a href="/recipes/${r.id}"><button class="small">View</button></a>`}
+              <button class="danger" onclick="removeRecipe(${r.id})">Remove</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function promptCaption(id) {
+      pendingCaptionRecipeId = id;
+      document.getElementById('captionPrompt').style.display = 'block';
+      document.getElementById('captionInput').focus();
+    }
+
+    async function addRecipe() {
+      const messageBox = document.getElementById('addMessage');
+      const urlInput = document.getElementById('urlInput');
+      const categoryId = document.getElementById('categorySelect').value;
+      messageBox.innerHTML = '';
+      document.getElementById('captionPrompt').style.display = 'none';
+
+      if (!urlInput.value.trim()) {
+        messageBox.innerHTML = '<div class="error-box">Paste a link first.</div>';
+        return;
+      }
+
+      messageBox.innerHTML = '<p style="color:#6B5F70;font-size:13px;">Adding...</p>';
+
+      const res = await fetch('/api/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: urlInput.value.trim(), category_id: categoryId || null }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        messageBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+        return;
+      }
+
+      if (data.needs_caption) {
+        messageBox.innerHTML = '';
+        pendingCaptionRecipeId = data.id;
+        document.getElementById('captionPrompt').style.display = 'block';
+      } else if (data.status === 'extracted') {
+        messageBox.innerHTML = `<div class="success-box">Added "${data.title}".</div>`;
+      } else if (data.status === 'needs_manual') {
+        messageBox.innerHTML = `<div class="info-box">${data.extraction_message || 'No recipe found in this caption.'} You can edit it manually from the recipe page.</div>`;
+      }
+
+      urlInput.value = '';
+      loadRecipes();
+    }
+
+    async function submitCaption() {
+      const messageBox = document.getElementById('addMessage');
+      const captionInput = document.getElementById('captionInput');
+
+      if (!captionInput.value.trim()) {
+        messageBox.innerHTML = '<div class="error-box">Paste the caption text first.</div>';
+        return;
+      }
+
+      const res = await fetch(`/api/recipes/${pendingCaptionRecipeId}/caption`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caption: captionInput.value.trim() }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        messageBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+        return;
+      }
+
+      if (data.status === 'extracted') {
+        messageBox.innerHTML = `<div class="success-box">Added "${data.title}".</div>`;
+      } else {
+        messageBox.innerHTML = `<div class="info-box">${data.extraction_message || 'No recipe found in this caption.'} You can edit it manually from the recipe page.</div>`;
+      }
+
+      document.getElementById('captionPrompt').style.display = 'none';
+      captionInput.value = '';
+      pendingCaptionRecipeId = null;
+      loadRecipes();
+    }
+
+    async function removeRecipe(id) {
+      await fetch(`/api/recipes/${id}`, { method: 'DELETE' });
+      loadRecipes();
+    }
+
+    function toggleBulk() {
+      const section = document.getElementById('bulkSection');
+      section.style.display = section.style.display === 'block' ? 'none' : 'block';
+    }
+
+    async function bulkImport() {
+      const messageBox = document.getElementById('bulkMessage');
+      const fileInput = document.getElementById('bulkFileInput');
+      messageBox.innerHTML = '';
+
+      if (!fileInput.files.length) {
+        messageBox.innerHTML = '<div class="error-box">Choose a file first.</div>';
+        return;
+      }
+
+      messageBox.innerHTML = '<p style="color:#6B5F70;font-size:13px;">Importing - this can take a while for a large backlog, since each TikTok link needs a live lookup...</p>';
+
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+
+      const res = await fetch('/api/recipes/bulk-import', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (!res.ok) {
+        messageBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+        return;
+      }
+
+      messageBox.innerHTML = `<div class="success-box">Found ${data.total_found} links - taking you to review and categorize them...</div>`;
+      fileInput.value = '';
+      if (data.recipe_ids && data.recipe_ids.length > 0) {
+        window.location.href = `/bulk-review?ids=${data.recipe_ids.join(',')}`;
+      } else {
+        loadRecipes();
+      }
+    }
+
+    loadCategoriesIntoSelect();
+    loadRecipes();
+  </script>
+</body>
+</html>
