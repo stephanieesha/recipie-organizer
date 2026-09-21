@@ -5,6 +5,7 @@ Run with: python src/app.py
 Then open: http://localhost:5050
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ load_dotenv()
 from flask import Flask, jsonify, render_template, request
 
 from db import get_connection, init_db
+from limits import client_ip, max_bulk_links, too_many_requests, use_ai_call
 from url_utils import detect_platform, extract_urls_from_text
 from tiktok_oembed import fetch_tiktok_data, TikTokFetchError
 from recipe_extractor import extract_recipe, NoRecipeFoundError, ExtractionError
@@ -35,7 +37,31 @@ app = Flask(__name__, template_folder=str(ROOT / "templates"))
 init_db()
 
 
+@app.before_request
+def limit_changes_per_visitor():
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and too_many_requests(client_ip(request)):
+        return jsonify({"error": "Too many requests - please slow down and try again in a minute"}), 429
+
+
+@app.after_request
+def keep_out_of_search_engines(response):
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return response
+
+
+@app.route("/robots.txt")
+def robots():
+    return "User-agent: *\nDisallow: /\n", 200, {"Content-Type": "text/plain"}
+
+
 def _run_extraction(conn, recipe_id: int, caption: str) -> dict:
+    if not use_ai_call(conn):
+        recipe = mark_recipe_needs_manual(conn, recipe_id)
+        recipe["extraction_message"] = (
+            "Today's limit for automatic extraction has been reached - the link is saved, "
+            "so you can fill in the recipe by hand or try again tomorrow"
+        )
+        return recipe
     try:
         result = extract_recipe(caption)
         return update_recipe_extracted(conn, recipe_id, result["title"], result["ingredients"], result["directions"])
@@ -121,6 +147,12 @@ def create_recipe():
 
     conn = get_connection()
     try:
+        if category_id is not None:
+            try:
+                get_category(conn, category_id)
+            except CategoryNotFound:
+                return jsonify({"error": "Category not found"}), 404
+
         if platform == "tiktok":
             recipe = add_recipe(conn, url, platform, category_id=category_id)
             try:
@@ -200,10 +232,14 @@ def assign_recipe_category(recipe_id):
 
     conn = get_connection()
     try:
+        if category_id is not None:
+            get_category(conn, category_id)
         recipe = set_recipe_category(conn, recipe_id, category_id)
         return jsonify(recipe)
     except RecipeNotFound:
         return jsonify({"error": "Recipe not found"}), 404
+    except CategoryNotFound:
+        return jsonify({"error": "Category not found"}), 404
     finally:
         conn.close()
 
@@ -236,6 +272,8 @@ def bulk_import():
     urls = extract_urls_from_text(text)
     if not urls:
         return jsonify({"error": "No TikTok or Instagram links found in this file"}), 422
+    if max_bulk_links() and len(urls) > max_bulk_links():
+        return jsonify({"error": f"Too many links in one import (the limit is {max_bulk_links()})"}), 400
 
     conn = get_connection()
     summary = {"total_found": len(urls), "extracted": 0, "needs_caption": 0, "needs_manual": 0, "skipped": 0, "recipe_ids": []}
@@ -329,4 +367,4 @@ def list_category_recipes(category_id):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5050)
+    app.run(debug=os.environ.get("FLASK_DEBUG", "1") == "1", port=int(os.environ.get("PORT", "5050")))

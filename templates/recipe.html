@@ -40,6 +40,10 @@
   </div>
 
   <script>
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
     const RECIPE_ID = {{ recipe_id }};
     let currentRecipe = null;
     let editMode = false;
@@ -65,30 +69,30 @@
 
       let html = '';
       if (r.status === 'needs_manual') {
-        html += `<div class="info-box">No recipe could be extracted automatically for this one${r.extraction_message ? ': ' + r.extraction_message : ''}. Add it manually below.</div>`;
+        html += `<div class="info-box">No recipe could be extracted automatically for this one${r.extraction_message ? ': ' + esc(r.extraction_message) : ''}. Add it manually below.</div>`;
       } else if (r.status === 'pending') {
         html += `<div class="info-box">Still waiting on a caption - go back to the list and add one.</div>`;
       }
 
       if (r.thumbnail_url) {
-        html += `<img src="${r.thumbnail_url}" class="recipe-hero-image" alt="">`;
+        html += `<img src="${esc(r.thumbnail_url)}" class="recipe-hero-image" alt="">`;
       }
 
-      html += `<h2 class="recipe-title">${r.title || 'Untitled recipe'}</h2>`;
-      html += `<a href="${r.source_url}" target="_blank" class="source-link">View original on ${r.platform}</a>`;
+      html += `<h2 class="recipe-title">${esc(r.title || 'Untitled recipe')}</h2>`;
+      html += `<a href="${esc(r.source_url)}" target="_blank" class="source-link">View original on ${esc(r.platform)}</a>`;
 
       html += '<div class="section-label">Ingredients</div>';
       html += r.ingredients.length
-        ? `<ul class="ingredients">${r.ingredients.map((i) => `<li>${i}</li>`).join('')}</ul>`
+        ? `<ul class="ingredients">${r.ingredients.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
         : '<p style="color:#8A7E8F;font-size:13px;">None yet.</p>';
 
       html += '<div class="section-label">Directions</div>';
       html += r.directions.length
-        ? `<ol class="directions">${r.directions.map((d) => `<li>${d}</li>`).join('')}</ol>`
+        ? `<ol class="directions">${r.directions.map((d) => `<li>${esc(d)}</li>`).join('')}</ol>`
         : '<p style="color:#8A7E8F;font-size:13px;">None yet.</p>';
 
       if (r.caption_raw) {
-        html += `<div class="section-label">Original caption</div><p style="font-size:12px;color:#8A7E8F;white-space:pre-wrap;">${r.caption_raw}</p>`;
+        html += `<div class="section-label">Original caption</div><p style="font-size:12px;color:#8A7E8F;white-space:pre-wrap;">${esc(r.caption_raw)}</p>`;
       }
 
       html += `<div style="margin-top:20px;"><button onclick="enterEditMode()">Edit</button></div>`;
@@ -107,17 +111,17 @@
       const ingredients = r.ingredients.length ? r.ingredients : [''];
       const directions = r.directions.length ? r.directions : [''];
 
-      let html = `<input type="text" id="editTitle" value="${(r.title || '').replace(/"/g, '&quot;')}" placeholder="Recipe title" />`;
+      let html = `<input type="text" id="editTitle" value="${esc(r.title || '')}" placeholder="Recipe title" />`;
 
       html += '<div class="section-label">Ingredients</div><div id="ingredientRows">';
       ingredients.forEach((ing) => {
-        html += `<div class="ingredient-edit-row"><input type="text" class="ing-input" value="${ing.replace(/"/g, '&quot;')}" /><button class="remove-line" onclick="removeRow(this)">Remove</button></div>`;
+        html += `<div class="ingredient-edit-row"><input type="text" class="ing-input" value="${esc(ing)}" /><button class="remove-line" onclick="removeRow(this)">Remove</button></div>`;
       });
       html += '</div><button class="add-line" onclick="addRow(\'ingredientRows\', \'ing-input\', \'ingredient-edit-row\')">Add ingredient</button>';
 
       html += '<div class="section-label">Directions</div><div id="directionRows">';
       directions.forEach((dir) => {
-        html += `<div class="direction-edit-row"><input type="text" class="dir-input" value="${dir.replace(/"/g, '&quot;')}" /><button class="remove-line" onclick="removeRow(this)">Remove</button></div>`;
+        html += `<div class="direction-edit-row"><input type="text" class="dir-input" value="${esc(dir)}" /><button class="remove-line" onclick="removeRow(this)">Remove</button></div>`;
       });
       html += '</div><button class="add-line" onclick="addRow(\'directionRows\', \'dir-input\', \'direction-edit-row\')">Add step</button>';
 

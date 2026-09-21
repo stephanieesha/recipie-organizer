@@ -9,14 +9,13 @@ Recipe storage. status tracks where a recipe is in its lifecycle:
 """
 
 import json
-import sqlite3
 
 
 class RecipeNotFound(Exception):
     pass
 
 
-def _row_to_recipe(row: sqlite3.Row) -> dict:
+def _row_to_recipe(row) -> dict:
     recipe = dict(row)
     recipe["ingredients"] = json.loads(recipe["ingredients_json"]) if recipe["ingredients_json"] else []
     recipe["directions"] = json.loads(recipe["directions_json"]) if recipe["directions_json"] else []
@@ -25,7 +24,7 @@ def _row_to_recipe(row: sqlite3.Row) -> dict:
     return recipe
 
 
-def add_recipe(conn: sqlite3.Connection, source_url: str, platform: str, caption_raw: str = None,
+def add_recipe(conn, source_url: str, platform: str, caption_raw: str = None,
                 category_id: int = None, thumbnail_url: str = None) -> dict:
     cursor = conn.execute(
         "INSERT INTO recipes (source_url, platform, caption_raw, status, category_id, thumbnail_url) VALUES (?, ?, ?, 'pending', ?, ?)",
@@ -35,19 +34,19 @@ def add_recipe(conn: sqlite3.Connection, source_url: str, platform: str, caption
     return get_recipe(conn, cursor.lastrowid)
 
 
-def set_recipe_thumbnail(conn: sqlite3.Connection, recipe_id: int, thumbnail_url: str) -> dict:
+def set_recipe_thumbnail(conn, recipe_id: int, thumbnail_url: str) -> dict:
     conn.execute("UPDATE recipes SET thumbnail_url = ? WHERE id = ?", (thumbnail_url, recipe_id))
     conn.commit()
     return get_recipe(conn, recipe_id)
 
 
-def set_recipe_category(conn: sqlite3.Connection, recipe_id: int, category_id: int) -> dict:
+def set_recipe_category(conn, recipe_id: int, category_id: int) -> dict:
     conn.execute("UPDATE recipes SET category_id = ? WHERE id = ?", (category_id, recipe_id))
     conn.commit()
     return get_recipe(conn, recipe_id)
 
 
-def update_recipe_extracted(conn: sqlite3.Connection, recipe_id: int, title: str, ingredients: list, directions: list) -> dict:
+def update_recipe_extracted(conn, recipe_id: int, title: str, ingredients: list, directions: list) -> dict:
     conn.execute(
         """
         UPDATE recipes
@@ -60,7 +59,7 @@ def update_recipe_extracted(conn: sqlite3.Connection, recipe_id: int, title: str
     return get_recipe(conn, recipe_id)
 
 
-def mark_recipe_needs_manual(conn: sqlite3.Connection, recipe_id: int, caption_raw: str = None) -> dict:
+def mark_recipe_needs_manual(conn, recipe_id: int, caption_raw: str = None) -> dict:
     if caption_raw is not None:
         conn.execute("UPDATE recipes SET status = 'needs_manual', caption_raw = ? WHERE id = ?", (caption_raw, recipe_id))
     else:
@@ -69,7 +68,7 @@ def mark_recipe_needs_manual(conn: sqlite3.Connection, recipe_id: int, caption_r
     return get_recipe(conn, recipe_id)
 
 
-def update_recipe_manual(conn: sqlite3.Connection, recipe_id: int, title: str, ingredients: list, directions: list) -> dict:
+def update_recipe_manual(conn, recipe_id: int, title: str, ingredients: list, directions: list) -> dict:
     conn.execute(
         """
         UPDATE recipes
@@ -82,7 +81,7 @@ def update_recipe_manual(conn: sqlite3.Connection, recipe_id: int, title: str, i
     return get_recipe(conn, recipe_id)
 
 
-def get_recipes(conn: sqlite3.Connection) -> list:
+def get_recipes(conn) -> list:
     rows = conn.execute(
         """
         SELECT r.*, c.name as category_name
@@ -94,7 +93,7 @@ def get_recipes(conn: sqlite3.Connection) -> list:
     return [_row_to_recipe(row) for row in rows]
 
 
-def get_recipes_by_category(conn: sqlite3.Connection, category_id: int) -> list:
+def get_recipes_by_category(conn, category_id: int) -> list:
     rows = conn.execute(
         """
         SELECT r.*, c.name as category_name
@@ -108,7 +107,7 @@ def get_recipes_by_category(conn: sqlite3.Connection, category_id: int) -> list:
     return [_row_to_recipe(row) for row in rows]
 
 
-def get_recipe(conn: sqlite3.Connection, recipe_id: int) -> dict:
+def get_recipe(conn, recipe_id: int) -> dict:
     row = conn.execute(
         """
         SELECT r.*, c.name as category_name
@@ -123,7 +122,7 @@ def get_recipe(conn: sqlite3.Connection, recipe_id: int) -> dict:
     return _row_to_recipe(row)
 
 
-def delete_recipe(conn: sqlite3.Connection, recipe_id: int) -> None:
+def delete_recipe(conn, recipe_id: int) -> None:
     cursor = conn.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     conn.commit()
     if cursor.rowcount == 0:

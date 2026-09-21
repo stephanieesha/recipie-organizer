@@ -70,6 +70,10 @@
   </div>
 
   <script>
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
     const CATEGORY_ID = {{ category_id }};
     let pendingCaptionRecipeId = null;
 
@@ -96,12 +100,12 @@
       grid.innerHTML = '<div class="recipe-grid">' + recipes.map((r) => {
         const title = r.title || (r.status === 'pending' ? 'Awaiting caption' : 'Untitled');
         const thumb = r.thumbnail_url
-          ? `<img src="${r.thumbnail_url}" class="grid-thumb" alt="">`
+          ? `<img src="${esc(r.thumbnail_url)}" class="grid-thumb" alt="">`
           : `<div class="grid-thumb-placeholder"></div>`;
         return `
           <div class="grid-cell" onclick="window.location.href='/recipes/${r.id}'">
             ${thumb}
-            <div class="grid-name">${title}</div>
+            <div class="grid-name">${esc(title)}</div>
           </div>
         `;
       }).join('') + '</div>';
@@ -128,7 +132,7 @@
       const data = await res.json();
 
       if (!res.ok) {
-        messageBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+        messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
         return;
       }
 
@@ -137,9 +141,9 @@
         pendingCaptionRecipeId = data.id;
         document.getElementById('captionPrompt').style.display = 'block';
       } else if (data.status === 'extracted') {
-        messageBox.innerHTML = `<div class="success-box">Added "${data.title}".</div>`;
+        messageBox.innerHTML = `<div class="success-box">Added "${esc(data.title)}".</div>`;
       } else if (data.status === 'needs_manual') {
-        messageBox.innerHTML = `<div class="info-box">${data.extraction_message || 'No recipe found in this caption.'} You can edit it manually from the recipe page.</div>`;
+        messageBox.innerHTML = `<div class="info-box">${esc(data.extraction_message || 'No recipe found in this caption.')} You can edit it manually from the recipe page.</div>`;
       }
 
       urlInput.value = '';
@@ -163,14 +167,14 @@
       const data = await res.json();
 
       if (!res.ok) {
-        messageBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+        messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
         return;
       }
 
       if (data.status === 'extracted') {
-        messageBox.innerHTML = `<div class="success-box">Added "${data.title}".</div>`;
+        messageBox.innerHTML = `<div class="success-box">Added "${esc(data.title)}".</div>`;
       } else {
-        messageBox.innerHTML = `<div class="info-box">${data.extraction_message || 'No recipe found in this caption.'} You can edit it manually from the recipe page.</div>`;
+        messageBox.innerHTML = `<div class="info-box">${esc(data.extraction_message || 'No recipe found in this caption.')} You can edit it manually from the recipe page.</div>`;
       }
 
       document.getElementById('captionPrompt').style.display = 'none';

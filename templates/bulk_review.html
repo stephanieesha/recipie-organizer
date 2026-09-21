@@ -49,6 +49,10 @@
   </div>
 
   <script>
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
     const params = new URLSearchParams(window.location.search);
     const RECIPE_IDS = (params.get('ids') || '').split(',').filter(Boolean).map(Number);
     let categories = [];
@@ -61,7 +65,7 @@
     function categoryOptions(selectedId) {
       let html = '<option value="">No category</option>';
       categories.forEach((c) => {
-        html += `<option value="${c.id}" ${selectedId === c.id ? 'selected' : ''}>${c.name}</option>`;
+        html += `<option value="${c.id}" ${selectedId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`;
       });
       return html;
     }
@@ -81,14 +85,14 @@
       list.innerHTML = recipes.filter(Boolean).map((r) => {
         const title = r.title || (r.status === 'pending' ? 'Awaiting caption' : 'Untitled');
         const thumb = r.thumbnail_url
-          ? `<img src="${r.thumbnail_url}" class="recipe-thumb" alt="">`
+          ? `<img src="${esc(r.thumbnail_url)}" class="recipe-thumb" alt="">`
           : `<div class="recipe-thumb-placeholder"></div>`;
         return `
           <div class="recipe-row">
             ${thumb}
             <div class="recipe-info">
-              <div class="recipe-title">${title}</div>
-              <div class="recipe-meta">${r.platform} &middot; <span class="status-tag status-${r.status}">${r.status.replace('_', ' ')}</span><span class="assigned-tag" id="assigned-${r.id}"></span></div>
+              <div class="recipe-title">${esc(title)}</div>
+              <div class="recipe-meta">${esc(r.platform)} &middot; <span class="status-tag status-${r.status}">${r.status.replace('_', ' ')}</span><span class="assigned-tag" id="assigned-${r.id}"></span></div>
             </div>
             <select onchange="assignCategory(${r.id}, this.value)">
               ${categoryOptions(r.category_id)}
