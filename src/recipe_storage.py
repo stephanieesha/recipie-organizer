@@ -6,6 +6,10 @@ Recipe storage. status tracks where a recipe is in its lifecycle:
 - 'needs_manual': extraction ran but found no recipe, or failed -
   the link and any caption are kept so it can be filled in by hand
   rather than losing the saved link entirely
+
+Every recipe belongs to a user. Pass user_id to limit a read or change to that
+person's own recipes - someone else's recipe then behaves exactly like one that
+does not exist (RecipeNotFound).
 """
 
 import json
@@ -13,6 +17,13 @@ import json
 
 class RecipeNotFound(Exception):
     pass
+
+
+def _owned_by(user_id, column: str = "user_id"):
+    """SQL to add to a WHERE clause, plus its parameters, limiting it to one user's rows."""
+    if user_id is None:
+        return "", ()
+    return f" AND {column} = ?", (user_id,)
 
 
 def _row_to_recipe(row) -> dict:
@@ -25,10 +36,10 @@ def _row_to_recipe(row) -> dict:
 
 
 def add_recipe(conn, source_url: str, platform: str, caption_raw: str = None,
-                category_id: int = None, thumbnail_url: str = None) -> dict:
+                category_id: int = None, thumbnail_url: str = None, user_id: int = None) -> dict:
     cursor = conn.execute(
-        "INSERT INTO recipes (source_url, platform, caption_raw, status, category_id, thumbnail_url) VALUES (?, ?, ?, 'pending', ?, ?)",
-        (source_url, platform, caption_raw, category_id, thumbnail_url),
+        "INSERT INTO recipes (source_url, platform, caption_raw, status, category_id, thumbnail_url, user_id) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
+        (source_url, platform, caption_raw, category_id, thumbnail_url, user_id),
     )
     conn.commit()
     return get_recipe(conn, cursor.lastrowid)
@@ -40,10 +51,11 @@ def set_recipe_thumbnail(conn, recipe_id: int, thumbnail_url: str) -> dict:
     return get_recipe(conn, recipe_id)
 
 
-def set_recipe_category(conn, recipe_id: int, category_id: int) -> dict:
-    conn.execute("UPDATE recipes SET category_id = ? WHERE id = ?", (category_id, recipe_id))
+def set_recipe_category(conn, recipe_id: int, category_id: int, user_id: int = None) -> dict:
+    owned, owner = _owned_by(user_id)
+    conn.execute(f"UPDATE recipes SET category_id = ? WHERE id = ?{owned}", (category_id, recipe_id) + owner)
     conn.commit()
-    return get_recipe(conn, recipe_id)
+    return get_recipe(conn, recipe_id, user_id=user_id)
 
 
 def update_recipe_extracted(conn, recipe_id: int, title: str, ingredients: list, directions: list) -> dict:
@@ -68,62 +80,70 @@ def mark_recipe_needs_manual(conn, recipe_id: int, caption_raw: str = None) -> d
     return get_recipe(conn, recipe_id)
 
 
-def update_recipe_manual(conn, recipe_id: int, title: str, ingredients: list, directions: list) -> dict:
+def update_recipe_manual(conn, recipe_id: int, title: str, ingredients: list, directions: list,
+                          user_id: int = None) -> dict:
+    owned, owner = _owned_by(user_id)
     conn.execute(
-        """
+        f"""
         UPDATE recipes
         SET title = ?, ingredients_json = ?, directions_json = ?, status = 'extracted'
-        WHERE id = ?
+        WHERE id = ?{owned}
         """,
-        (title, json.dumps(ingredients), json.dumps(directions), recipe_id),
+        (title, json.dumps(ingredients), json.dumps(directions), recipe_id) + owner,
     )
     conn.commit()
-    return get_recipe(conn, recipe_id)
+    return get_recipe(conn, recipe_id, user_id=user_id)
 
 
-def get_recipes(conn) -> list:
+def get_recipes(conn, user_id: int = None) -> list:
+    owned, owner = _owned_by(user_id, "r.user_id")
     rows = conn.execute(
-        """
+        f"""
         SELECT r.*, c.name as category_name
         FROM recipes r
         LEFT JOIN categories c ON c.id = r.category_id
-        ORDER BY r.created_at DESC, r.id DESC
-        """
-    ).fetchall()
-    return [_row_to_recipe(row) for row in rows]
-
-
-def get_recipes_by_category(conn, category_id: int) -> list:
-    rows = conn.execute(
-        """
-        SELECT r.*, c.name as category_name
-        FROM recipes r
-        LEFT JOIN categories c ON c.id = r.category_id
-        WHERE r.category_id = ?
+        WHERE 1 = 1{owned}
         ORDER BY r.created_at DESC, r.id DESC
         """,
-        (category_id,),
+        owner,
     ).fetchall()
     return [_row_to_recipe(row) for row in rows]
 
 
-def get_recipe(conn, recipe_id: int) -> dict:
+def get_recipes_by_category(conn, category_id: int, user_id: int = None) -> list:
+    owned, owner = _owned_by(user_id, "r.user_id")
+    rows = conn.execute(
+        f"""
+        SELECT r.*, c.name as category_name
+        FROM recipes r
+        LEFT JOIN categories c ON c.id = r.category_id
+        WHERE r.category_id = ?{owned}
+        ORDER BY r.created_at DESC, r.id DESC
+        """,
+        (category_id,) + owner,
+    ).fetchall()
+    return [_row_to_recipe(row) for row in rows]
+
+
+def get_recipe(conn, recipe_id: int, user_id: int = None) -> dict:
+    owned, owner = _owned_by(user_id, "r.user_id")
     row = conn.execute(
-        """
+        f"""
         SELECT r.*, c.name as category_name
         FROM recipes r
         LEFT JOIN categories c ON c.id = r.category_id
-        WHERE r.id = ?
+        WHERE r.id = ?{owned}
         """,
-        (recipe_id,),
+        (recipe_id,) + owner,
     ).fetchone()
     if row is None:
         raise RecipeNotFound(f"No recipe with id {recipe_id}")
     return _row_to_recipe(row)
 
 
-def delete_recipe(conn, recipe_id: int) -> None:
-    cursor = conn.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+def delete_recipe(conn, recipe_id: int, user_id: int = None) -> None:
+    owned, owner = _owned_by(user_id)
+    cursor = conn.execute(f"DELETE FROM recipes WHERE id = ?{owned}", (recipe_id,) + owner)
     conn.commit()
     if cursor.rowcount == 0:
         raise RecipeNotFound(f"No recipe with id {recipe_id}")

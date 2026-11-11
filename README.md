@@ -1,8 +1,9 @@
 # Recipe Organizer
 
 Saves recipes from Instagram/TikTok links, extracting ingredients and
-directions automatically where the platform allows it. No accounts -
-single-user local tool, per your choice.
+directions automatically where the platform allows it. Each person signs
+up with an email and password and sees only their own recipes and
+categories.
 
 ## Important: how Instagram and TikTok are actually handled differs
 

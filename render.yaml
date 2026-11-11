@@ -11,10 +11,16 @@ services:
         value: "3.12.7"
       - key: DATABASE_URL
         sync: false          # paste your Neon connection string in the Render dashboard
+      - key: FLASK_SECRET_KEY
+        sync: false          # required: a long random value that signs the log-in cookie
       - key: ANTHROPIC_API_KEY
         sync: false          # optional; without it recipes are saved for manual entry
       - key: WRITE_LIMIT_PER_MINUTE
         value: "60"
+      - key: AUTH_LIMIT_PER_15_MIN
+        value: "10"
+      - key: DAILY_SIGNUP_LIMIT
+        value: "20"
       - key: DAILY_AI_LIMIT
         value: "25"
       - key: MAX_BULK_LINKS

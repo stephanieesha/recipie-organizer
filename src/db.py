@@ -6,7 +6,8 @@ environment variable is set (as it is in production), PostgreSQL is used
 instead, through a small wrapper that behaves like the sqlite3 connection the
 rest of the code was written against (execute, commit, close, lastrowid...).
 
-No accounts/auth for this app, so no user_id scoping anywhere.
+Recipes and categories belong to a user (user_id); rows saved before accounts
+existed have no owner and are handed to the first account that signs up.
 """
 
 import os
@@ -26,10 +27,19 @@ DB_PATH = Path(__file__).parent.parent / "data" / "recipes.db"
 IntegrityError = (sqlite3.IntegrityError,) + ((psycopg.IntegrityError,) if psycopg else ())
 
 SQLITE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    user_id INTEGER REFERENCES users(id),
+    UNIQUE (user_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS recipes (
@@ -43,7 +53,8 @@ CREATE TABLE IF NOT EXISTS recipes (
     status TEXT NOT NULL DEFAULT 'pending',
     thumbnail_url TEXT,
     category_id INTEGER REFERENCES categories(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    user_id INTEGER REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS usage_counters (
@@ -57,10 +68,18 @@ CREATE TABLE IF NOT EXISTS usage_counters (
 # Same tables for PostgreSQL. Timestamps stay text in the same format SQLite produces,
 # so ordering and the JSON the app returns are identical on both databases.
 POSTGRES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+
 CREATE TABLE IF NOT EXISTS categories (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+    user_id INTEGER REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS recipes (
@@ -74,7 +93,8 @@ CREATE TABLE IF NOT EXISTS recipes (
     status TEXT NOT NULL DEFAULT 'pending',
     thumbnail_url TEXT,
     category_id INTEGER REFERENCES categories(id),
-    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+    user_id INTEGER REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS usage_counters (
@@ -83,6 +103,13 @@ CREATE TABLE IF NOT EXISTS usage_counters (
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, kind)
 );
+
+-- Accounts were added after the first release: bring an existing database up to date.
+-- Category names are now unique per user rather than across everyone.
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
+ALTER TABLE recipes ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
+ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_key;
+CREATE UNIQUE INDEX IF NOT EXISTS categories_user_name_key ON categories (user_id, name);
 """
 
 # Columns added after the original release - ALTER TABLE ADD COLUMN keeps
@@ -91,10 +118,12 @@ CREATE TABLE IF NOT EXISTS usage_counters (
 MIGRATIONS = [
     ("recipes", "thumbnail_url", "TEXT"),
     ("recipes", "category_id", "INTEGER REFERENCES categories(id)"),
+    ("recipes", "user_id", "INTEGER REFERENCES users(id)"),
+    ("categories", "user_id", "INTEGER REFERENCES users(id)"),
 ]
 
 # Tables whose primary key column is called id, so INSERTs can return the new id on PostgreSQL.
-_TABLES_WITH_ID = {"categories", "recipes"}
+_TABLES_WITH_ID = {"categories", "recipes", "users"}
 _INSERT_RE = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 
 
@@ -149,6 +178,32 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
     conn.commit()
+    _make_category_names_unique_per_user(conn)
+
+
+def _make_category_names_unique_per_user(conn: sqlite3.Connection) -> None:
+    """A database from before accounts has category names unique across everyone. SQLite
+    cannot drop that rule in place, so the table is rebuilt once with the per-user rule."""
+    table_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'categories'").fetchone()["sql"]
+    if "UNIQUE (user_id, name)" in table_sql:
+        return
+    conn.executescript(
+        """
+        BEGIN;
+        CREATE TABLE categories_rebuilt (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            user_id INTEGER REFERENCES users(id),
+            UNIQUE (user_id, name)
+        );
+        INSERT INTO categories_rebuilt (id, name, created_at, user_id)
+            SELECT id, name, created_at, user_id FROM categories;
+        DROP TABLE categories;
+        ALTER TABLE categories_rebuilt RENAME TO categories;
+        COMMIT;
+        """
+    )
 
 
 def get_connection(db_path: Path = None):

@@ -1,9 +1,11 @@
 """
-Safety limits for a deployment that anyone with the link can reach. All three
+Safety limits for a deployment that anyone with the link can reach. All of them
 are OFF unless their environment variable is set, so local runs and tests
 are never throttled:
 
   WRITE_LIMIT_PER_MINUTE  max changes (POST/PUT/PATCH/DELETE) per visitor per minute
+  AUTH_LIMIT_PER_15_MIN   max log-in / sign-up attempts per visitor per 15 minutes (slows password guessing)
+  DAILY_SIGNUP_LIMIT      max new accounts per day
   DAILY_AI_LIMIT          max automatic recipe extractions per day, across all visitors
   MAX_BULK_LINKS          max links accepted in one bulk import
 """
@@ -45,6 +47,41 @@ def too_many_requests(ip: str, now: float = None) -> bool:
         return True
     window.append(now)
     return False
+
+
+_recent_auth_attempts = defaultdict(deque)
+
+
+def too_many_auth_attempts(ip: str, now: float = None) -> bool:
+    limit = _int_setting("AUTH_LIMIT_PER_15_MIN")
+    if limit <= 0:
+        return False
+    now = time.time() if now is None else now
+    window = _recent_auth_attempts[ip]
+    while window and now - window[0] > 15 * 60:
+        window.popleft()
+    if len(window) >= limit:
+        return True
+    window.append(now)
+    return False
+
+
+def use_signup(conn) -> bool:
+    """Counts one new account against today's cap. False means the cap is used up."""
+    limit = _int_setting("DAILY_SIGNUP_LIMIT")
+    if limit <= 0:
+        return True
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    conn.execute(
+        "INSERT INTO usage_counters (day, kind, count) VALUES (?, 'signup', 0) ON CONFLICT (day, kind) DO NOTHING",
+        (day,),
+    )
+    cursor = conn.execute(
+        "UPDATE usage_counters SET count = count + 1 WHERE day = ? AND kind = 'signup' AND count < ?",
+        (day, limit),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
 
 
 def max_bulk_links() -> int:

@@ -22,7 +22,7 @@ def clean_postgres_tables():
     init_db()
     conn = get_connection()
     try:
-        conn.execute("TRUNCATE recipes, categories, usage_counters RESTART IDENTITY CASCADE")
+        conn.execute("TRUNCATE recipes, categories, usage_counters, users RESTART IDENTITY CASCADE")
         conn.commit()
     finally:
         conn.close()
