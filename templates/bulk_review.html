@@ -5,29 +5,29 @@
   <title>Review Import - Recipe Organizer</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #8B7099; color: #161A1F; }
-    header { padding: 20px 32px; background: #161A1F; color: #fff; display: flex; justify-content: space-between; align-items: center; }
-    header h1 { margin: 0; font-size: 20px; }
-    header nav a { color: #DCCFE0; text-decoration: none; font-size: 13px; margin-left: 16px; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #F0DEE6; color: #2B0A16; }
+    header { padding: 20px 32px; background: #FFFFFF; color: #68012D; border-bottom: 1px solid #F0F1F0; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 24px; font-weight: 400; color: #68012D; }
+    header nav a { color: #8A1A44; text-decoration: none; font-size: 13px; margin-left: 16px; }
     .container { max-width: 760px; margin: 24px auto; padding: 0 24px; }
-    .card { background: #F3F1EA; border-radius: 10px; padding: 22px; margin-bottom: 20px; }
-    .card h2 { margin-top: 0; font-size: 16px; color: #161A1F; }
-    .intro { font-size: 13px; color: #6B5F70; margin-bottom: 16px; }
-    select { padding: 7px; border: 1px solid #D8C9DC; border-radius: 6px; font-size: 12px; background: #fff; color: #161A1F; }
-    button { padding: 9px 16px; border: none; border-radius: 20px; background: #161A1F; color: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
-    button:hover { background: #333; }
-    .recipe-row { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #E4DCE8; font-size: 13px; gap: 12px; }
-    .recipe-thumb { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: #E4DCE8; }
-    .recipe-thumb-placeholder { width: 48px; height: 48px; border-radius: 6px; background: #E4DCE8; flex-shrink: 0; }
+    .card { background: linear-gradient(160deg, #FFFFFF 0%, #FBEFF3 100%); border: 1px solid #EBC9D6; box-shadow: 0 1px 3px rgba(17, 17, 17, 0.06); border-radius: 10px; padding: 22px; margin-bottom: 20px; }
+    .card h2 { margin-top: 0; font-size: 20px; font-weight: 400; color: #68012D; }
+    .intro { font-size: 13px; color: #7C5A67; margin-bottom: 16px; }
+    select { padding: 7px; border: 1px solid #EBC9D6; border-radius: 6px; font-size: 12px; background: #fff; color: #2B0A16; }
+    button { padding: 10px 18px; border: none; border-radius: 6px; background: #68012D; color: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #8A1A44; }
+    .recipe-row { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #EBC9D6; font-size: 13px; gap: 12px; }
+    .recipe-thumb { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: #F6DCE5; }
+    .recipe-thumb-placeholder { width: 48px; height: 48px; border-radius: 6px; background: #F6DCE5; flex-shrink: 0; }
     .recipe-info { flex: 1; min-width: 0; }
     .recipe-title { font-weight: 500; }
-    .recipe-meta { color: #8A7E8F; font-size: 11px; }
+    .recipe-meta { color: #7C5A67; font-size: 11px; }
     .status-tag { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
     .status-extracted { background: #DEE9DC; color: #2E4A2E; }
-    .status-pending { background: #EFE6F2; color: #5A3E68; }
+    .status-pending { background: #F6DCE5; color: #68012D; }
     .status-needs_manual { background: #F0E4CF; color: #6B4E1F; }
     .assigned-tag { font-size: 10px; color: #2E4A2E; margin-left: 6px; }
-    .empty-state { color: #6B5F70; font-size: 13px; text-align: center; padding: 20px 0; }
+    .empty-state { color: #7C5A67; font-size: 13px; text-align: center; padding: 20px 0; }
   </style>
 </head>
 <body>

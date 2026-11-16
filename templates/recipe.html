@@ -5,29 +5,29 @@
   <title>Recipe - Recipe Organizer</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #8B7099; color: #161A1F; }
-    header { padding: 20px 32px; background: #161A1F; color: #fff; display: flex; justify-content: space-between; align-items: center; }
-    header h1 { margin: 0; font-size: 20px; }
-    header a { color: #DCCFE0; text-decoration: none; font-size: 13px; }
-    .container { max-width: 640px; margin: 24px auto; padding: 0 24px; }
-    .card { background: #F3F1EA; border-radius: 10px; padding: 24px; margin-bottom: 20px; }
-    input, textarea { padding: 9px; border: 1px solid #D8C9DC; border-radius: 6px; font-size: 13px; width: 100%; background: #fff; color: #161A1F; font-family: inherit; box-sizing: border-box; margin-bottom: 8px; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #F0DEE6; color: #2B0A16; }
+    header { padding: 20px 32px; background: #FFFFFF; color: #68012D; border-bottom: 1px solid #F0F1F0; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 24px; font-weight: 400; color: #68012D; }
+    header a { color: #8A1A44; text-decoration: none; font-size: 13px; }
+    .container { max-width: 760px; margin: 24px auto; padding: 0 24px; }
+    .card { background: linear-gradient(160deg, #FFFFFF 0%, #FBEFF3 100%); border: 1px solid #EBC9D6; box-shadow: 0 1px 3px rgba(17, 17, 17, 0.06); border-radius: 10px; padding: 22px; margin-bottom: 20px; }
+    input, textarea { padding: 9px; border: 1px solid #EBC9D6; border-radius: 6px; font-size: 13px; width: 100%; background: #fff; color: #2B0A16; font-family: inherit; box-sizing: border-box; margin-bottom: 8px; }
     textarea { min-height: 50px; resize: vertical; }
-    button { padding: 9px 16px; border: none; border-radius: 20px; background: #161A1F; color: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
-    button:hover { background: #333; }
-    button.small { padding: 5px 12px; font-size: 12px; }
-    button.secondary { background: #6B5F70; }
-    .info-box { background: #EFE6F2; border: 1px solid #D8C9DC; color: #5A3E68; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 14px; }
+    button { padding: 10px 18px; border: none; border-radius: 6px; background: #68012D; color: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #8A1A44; }
+    button.small { padding: 4px 10px; font-size: 11px; }
+    button.secondary { background: #FBEFF3; color: #68012D; border: 1px solid #EBC9D6; }
+    .info-box { background: #F6DCE5; border: 1px solid #EBC9D6; color: #68012D; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 14px; }
     .recipe-title { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
     .recipe-hero-image { width: 100%; max-height: 320px; object-fit: cover; border-radius: 8px; margin-bottom: 16px; display: block; }
-    .source-link { font-size: 12px; color: #6B4F78; margin-bottom: 18px; display: block; }
-    .section-label { font-size: 12px; font-weight: 600; color: #6B5F70; text-transform: uppercase; letter-spacing: 0.04em; margin: 18px 0 8px; }
+    .source-link { font-size: 12px; color: #8A1A44; margin-bottom: 18px; display: block; }
+    .section-label { font-size: 12px; font-weight: 600; color: #7C5A67; text-transform: uppercase; letter-spacing: 0.04em; margin: 18px 0 8px; }
     ul.ingredients, ol.directions { padding-left: 20px; margin: 0; }
     ul.ingredients li, ol.directions li { margin-bottom: 6px; font-size: 14px; line-height: 1.5; }
     .ingredient-edit-row, .direction-edit-row { display: flex; gap: 6px; margin-bottom: 6px; }
     .ingredient-edit-row input, .direction-edit-row input { margin-bottom: 0; }
-    .remove-line { background: #8A4E6B; padding: 6px 10px; font-size: 11px; }
-    .add-line { background: #6B5F70; padding: 6px 12px; font-size: 12px; margin-top: 4px; }
+    .remove-line { background: #A8344F; padding: 6px 10px; font-size: 11px; }
+    .add-line { background: #FBEFF3; color: #68012D; padding: 6px 12px; font-size: 12px; margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -84,15 +84,15 @@
       html += '<div class="section-label">Ingredients</div>';
       html += r.ingredients.length
         ? `<ul class="ingredients">${r.ingredients.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
-        : '<p style="color:#8A7E8F;font-size:13px;">None yet.</p>';
+        : '<p style="color:#7C5A67;font-size:13px;">None yet.</p>';
 
       html += '<div class="section-label">Directions</div>';
       html += r.directions.length
         ? `<ol class="directions">${r.directions.map((d) => `<li>${esc(d)}</li>`).join('')}</ol>`
-        : '<p style="color:#8A7E8F;font-size:13px;">None yet.</p>';
+        : '<p style="color:#7C5A67;font-size:13px;">None yet.</p>';
 
       if (r.caption_raw) {
-        html += `<div class="section-label">Original caption</div><p style="font-size:12px;color:#8A7E8F;white-space:pre-wrap;">${esc(r.caption_raw)}</p>`;
+        html += `<div class="section-label">Original caption</div><p style="font-size:12px;color:#7C5A67;white-space:pre-wrap;">${esc(r.caption_raw)}</p>`;
       }
 
       html += `<div style="margin-top:20px;"><button onclick="enterEditMode()">Edit</button></div>`;
