@@ -16,6 +16,10 @@ def test_detect_tiktok_short_url():
     assert detect_platform("https://vm.tiktok.com/ZMabcdef/") == "tiktok"
 
 
+def test_detect_tiktok_vt_short_url():
+    assert detect_platform("https://vt.tiktok.com/ZSpv3EJdj/") == "tiktok"
+
+
 def test_detect_instagram_reel():
     assert detect_platform("https://www.instagram.com/reel/DQ6rx2JDxFR/") == "instagram"
 

@@ -5,8 +5,8 @@ recipe links out of a bulk data-export file for the backlog-import flow.
 
 import re
 
-TIKTOK_PATTERN = re.compile(r"https?://(?:www\.|vm\.)?tiktok\.com/\S+", re.IGNORECASE)
-INSTAGRAM_PATTERN = re.compile(r"https?://(?:www\.)?instagram\.com/\S+", re.IGNORECASE)
+TIKTOK_PATTERN = re.compile(r"https?://(?:[\w-]+\.)?tiktok\.com/\S+", re.IGNORECASE)
+INSTAGRAM_PATTERN = re.compile(r"https?://(?:[\w-]+\.)?instagram\.com/\S+", re.IGNORECASE)
 
 
 def detect_platform(url: str) -> str:
