@@ -81,3 +81,41 @@ def test_extract_urls_ignores_unrelated_links():
 
 def test_extract_urls_empty_text_returns_empty_list():
     assert extract_urls_from_text("") == []
+
+
+# --- find_recipe_link: the link inside whatever was pasted -----------------
+
+from url_utils import find_recipe_link  # noqa: E402
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("https://www.tiktok.com/@user/video/123", "https://www.tiktok.com/@user/video/123"),
+    ("www.instagram.com/reel/ABC/", "https://www.instagram.com/reel/ABC/"),
+    ("instagram.com/reel/ABC/", "https://instagram.com/reel/ABC/"),
+    ("Check out this video https://vt.tiktok.com/ZSabc/ via TikTok", "https://vt.tiktok.com/ZSabc/"),
+    ("see (https://www.tiktok.com/@user/video/123).", "https://www.tiktok.com/@user/video/123"),
+    ("HTTPS://WWW.TIKTOK.COM/@user/video/1", "HTTPS://WWW.TIKTOK.COM/@user/video/1"),
+    ("https://www.tiktok.com/@u/video/1 https://www.tiktok.com/@u/video/1", "https://www.tiktok.com/@u/video/1"),
+])
+def test_find_recipe_link_returns_the_one_link(text, expected):
+    assert find_recipe_link(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "",
+    "no link here",
+    "https://www.youtube.com/watch?v=abc",
+    "https://www.tiktok.com/",
+    "https://tiktok.com.evil.example/video/1",
+    "https://nottiktok.com/@chef/video/1",
+    "https://evil.example/?u=https://www.tiktok.com/@chef/video/1",
+    "https://evil.example/?u=tiktok.com/@chef/video/1",
+])
+def test_find_recipe_link_refuses_text_without_a_real_link(text):
+    with pytest.raises(ValueError, match="TikTok or Instagram video, reel or post"):
+        find_recipe_link(text)
+
+
+def test_find_recipe_link_refuses_two_different_links():
+    with pytest.raises(ValueError, match="one link at a time"):
+        find_recipe_link("https://www.tiktok.com/@u/video/1 https://www.instagram.com/reel/ABC/")

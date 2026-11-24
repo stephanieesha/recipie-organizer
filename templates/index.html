@@ -84,6 +84,34 @@
       return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     }
 
+    // Sends a request and always hands back {ok, data} with a readable data.error when it
+    // failed. A dropped connection or an error page that is not JSON becomes a plain message
+    // instead of leaving the page stuck on "Adding...".
+    async function sendRequest(url, options) {
+      let res;
+      try {
+        res = await fetch(url, options);
+      } catch (err) {
+        return { ok: false, data: { error: 'Could not reach the server. Check your connection and try again.' } };
+      }
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (err) {
+        data = null;
+      }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        const error = res.ok
+          ? 'The server sent back something unexpected. Try again.'
+          : 'Something went wrong on our side. Try again in a moment.';
+        return { ok: false, data: { error } };
+      }
+      if (!res.ok && !data.error) {
+        data.error = 'Something went wrong. Try again.';
+      }
+      return { ok: res.ok, data };
+    }
+
     let pendingCaptionRecipeId = null;
 
     async function loadCategoriesIntoSelect() {
@@ -145,14 +173,13 @@
 
       messageBox.innerHTML = '<p style="color:#7C5A67;font-size:13px;">Adding...</p>';
 
-      const res = await fetch('/api/recipes', {
+      const { ok, data } = await sendRequest('/api/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: urlInput.value.trim(), category_id: categoryId || null }),
       });
-      const data = await res.json();
 
-      if (!res.ok) {
+      if (!ok) {
         messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
         return;
       }
@@ -180,14 +207,13 @@
         return;
       }
 
-      const res = await fetch(`/api/recipes/${pendingCaptionRecipeId}/caption`, {
+      const { ok, data } = await sendRequest(`/api/recipes/${pendingCaptionRecipeId}/caption`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ caption: captionInput.value.trim() }),
       });
-      const data = await res.json();
 
-      if (!res.ok) {
+      if (!ok) {
         messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
         return;
       }
@@ -229,10 +255,9 @@
       const formData = new FormData();
       formData.append('file', fileInput.files[0]);
 
-      const res = await fetch('/api/recipes/bulk-import', { method: 'POST', body: formData });
-      const data = await res.json();
+      const { ok, data } = await sendRequest('/api/recipes/bulk-import', { method: 'POST', body: formData });
 
-      if (!res.ok) {
+      if (!ok) {
         messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
         return;
       }

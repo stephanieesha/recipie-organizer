@@ -13,6 +13,7 @@ a sanctioned cover image for exactly this purpose.
 """
 
 import json
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,7 +25,20 @@ class TikTokFetchError(Exception):
     pass
 
 
+def _http_error_message(code: int) -> str:
+    if code == 404:
+        return "TikTok says this video doesn't exist or is private."
+    if code == 400:
+        return "TikTok didn't accept this link. Open the video in TikTok and copy the link from its Share menu."
+    if code == 429:
+        return "TikTok is limiting lookups right now."
+    if code >= 500:
+        return "TikTok isn't answering right now."
+    return f"TikTok refused the lookup (error {code})."
+
+
 def fetch_tiktok_data(url: str) -> dict:
+    """Every failure raises TikTokFetchError with one plain sentence that is safe to show on the page."""
     params = urllib.parse.urlencode({"url": url})
     request_url = f"{TIKTOK_OEMBED_URL}?{params}"
 
@@ -32,19 +46,30 @@ def fetch_tiktok_data(url: str) -> dict:
         with urllib.request.urlopen(request_url, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        if e.code == 404:
-            raise TikTokFetchError("This TikTok link doesn't seem to exist or is private")
-        raise TikTokFetchError(f"TikTok returned an error: HTTP {e.code}")
-    except (urllib.error.URLError, json.JSONDecodeError) as e:
-        raise TikTokFetchError(f"Could not reach TikTok: {e}")
+        raise TikTokFetchError(_http_error_message(e.code))
+    except (TimeoutError, socket.timeout):
+        raise TikTokFetchError("TikTok took too long to answer.")
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (TimeoutError, socket.timeout)):
+            raise TikTokFetchError("TikTok took too long to answer.")
+        raise TikTokFetchError("Could not reach TikTok right now.")
+    except OSError:
+        raise TikTokFetchError("Could not reach TikTok right now.")
+    except ValueError:
+        raise TikTokFetchError("TikTok sent back something this app could not read.")
 
-    title = data.get("title", "").strip()
+    if not isinstance(data, dict):
+        raise TikTokFetchError("TikTok sent back something this app could not read.")
+
+    title = data.get("title")
+    title = title.strip() if isinstance(title, str) else ""
     if not title:
-        raise TikTokFetchError("TikTok didn't return a caption for this video")
+        raise TikTokFetchError("TikTok didn't return a caption for this video.")
 
+    thumbnail = data.get("thumbnail_url")
     return {
         "caption": title,
-        "thumbnail_url": data.get("thumbnail_url"),
+        "thumbnail_url": thumbnail if isinstance(thumbnail, str) else None,
     }
 
 

@@ -21,7 +21,7 @@ from flask_login import LoginManager, UserMixin, current_user, login_required, l
 from db import get_connection, init_db
 from limits import client_ip, max_bulk_links, too_many_auth_attempts, too_many_requests, use_ai_call, use_signup
 from auth import create_user, authenticate_user, get_user_by_id, EmailAlreadyExists, InvalidCredentials
-from url_utils import detect_platform, extract_urls_from_text
+from url_utils import detect_platform, extract_urls_from_text, find_recipe_link
 from tiktok_oembed import fetch_tiktok_data, TikTokFetchError
 from recipe_extractor import extract_recipe, NoRecipeFoundError, ExtractionError
 from recipe_storage import (
@@ -249,15 +249,19 @@ def get_recipe_route(recipe_id):
 @app.route("/api/recipes", methods=["POST"])
 @login_required
 def create_recipe():
-    data = request.get_json() or {}
-    url = (data.get("url") or "").strip()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    pasted = data.get("url")
+    pasted = pasted.strip() if isinstance(pasted, str) else ""
     caption = data.get("caption")
     category_id = _parse_category_id(data)
 
-    if not url:
+    if not pasted:
         return jsonify({"error": "A link is required"}), 400
 
     try:
+        url = find_recipe_link(pasted)
         platform = detect_platform(url)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -276,7 +280,7 @@ def create_recipe():
                 fetched = fetch_tiktok_data(url)
             except TikTokFetchError as e:
                 recipe = mark_recipe_needs_manual(conn, recipe["id"])
-                recipe["extraction_message"] = f"Could not fetch this video's caption: {e}"
+                recipe["extraction_message"] = f"The link is saved. {e}"
                 return jsonify(recipe), 201
 
             conn.execute(
