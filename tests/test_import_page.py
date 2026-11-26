@@ -3,7 +3,9 @@ The import box on the home page: what it tells a person to upload, and the previ
 file holds before anything is saved. The Node.js tests are skipped when Node.js is not installed.
 """
 
+import html
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -44,6 +46,9 @@ const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 const reel = (i) => ({ url: 'https://www.instagram.com/reel/CODE' + i + '/', platform: 'instagram' });
 const reels = (count) => Array.from({ length: count }, (_, i) => reel(i + 1));
+// A recipe written out in the notes, as the server lists it, and a list of them.
+const note = (i) => ({ kind: 'note', text: 'Recipe ' + i + '\nIngredients and steps for recipe ' + i + '.', title: 'Recipe ' + i, url: '', platform: 'notes' });
+const notes = (count) => Array.from({ length: count }, (_, i) => note(i + 1));
 // The same list with some of its recipes marked as saved already (counting from 1).
 const withSaved = (links, ...saved) => links.map((link, i) => ({ ...link, already_saved: saved.includes(i + 1) }));
 
@@ -101,6 +106,13 @@ async function newPage() {
     page.call(input.match(/onchange="([^"]*)"/)[1]);
   };
 
+  // Types in the notes box the way a browser would: its own oninput code runs.
+  page.typeNotes = (text) => {
+    element('notesInput').value = text;
+    const box = html.match(/<textarea[^>]*id="notesInput"[^>]*>/)[0];
+    page.call(box.match(/oninput="([^"]*)"/)[1]);
+  };
+
   // Presses a button, found by its id or its label, the way a browser would: not when it is disabled.
   page.click = async (which) => {
     const buttons = [...html.matchAll(/<button([^>]*)>([^<]*)<\/button>/g)];
@@ -123,6 +135,12 @@ async function newPage() {
     await page.click('previewButton');
   };
 
+  page.previewNotes = async (items, limit, skipped, text) => {
+    page.replies['/api/recipes/notes-preview'] = { status: 200, body: { limit, links: items, skipped } };
+    page.typeNotes(text || 'my notes');
+    await page.click('notesPreviewButton');
+  };
+
   // What is on the screen. ticked is how the rows were drawn; after a click on a row, read the
   // import button instead.
   page.view = () => {
@@ -140,6 +158,8 @@ async function newPage() {
       importDisabled: button.disabled,
       selectAllLabel: element('selectAllButton').textContent,
       previewDisabled: element('previewButton').disabled,
+      notesPreviewDisabled: element('notesPreviewButton').disabled,
+      notesText: element('notesInput').value,
       message: element('bulkMessage').innerHTML,
       chosenFile: element('bulkFileInput').value,
       location: sandbox.window.location.href || null,
@@ -372,6 +392,131 @@ SCENARIOS = r"""
     answer();
     await waiting;
     return { during, posts: page.posts, after: page.view() };
+  },
+
+  notes_listed: async (page) => {
+    await page.previewNotes([reel(1), note(1), note(2)], 25, 0, 'my notes');
+    return { view: page.view(), posts: page.posts };
+  },
+
+  notes_left_out: async (page) => {
+    await page.previewNotes([note(1)], 25, 1);
+    const one = page.view();
+    await page.previewNotes([note(1)], 25, 3);
+    const three = page.view();
+    await page.previewNotes([note(1)], 25, 0);
+    return { one, three, none: page.view() };
+  },
+
+  notes_sent_as_typed: async (page) => {
+    await page.previewNotes([note(1)], 25, 0, '\n  my notes  \n');
+    return page.posts;
+  },
+
+  notes_import_chosen: async (page) => {
+    page.replies['/api/recipes/bulk-import'] = { status: 200, body: { recipe_ids: [5, 6] } };
+    await page.previewNotes([reel(1), note(1), note(2)], 25, 0, 'my notes');
+    page.tick(1);
+    await page.click('importButton');
+    return { posts: page.posts, view: page.view() };
+  },
+
+  notes_import_only_notes: async (page) => {
+    page.replies['/api/recipes/bulk-import'] = { status: 200, body: { recipe_ids: [5, 6] } };
+    await page.previewNotes([note(1), note(2)], 25, 0);
+    await page.click('importButton');
+    return page.posts;
+  },
+
+  notes_import_fails: async (page) => {
+    page.replies['/api/recipes/bulk-import'] = { status: 400, body: { error: 'Too many recipes in one import (the limit is 25)' } };
+    await page.previewNotes([note(1), note(2)], 25, 0, 'my notes');
+    await page.click('importButton');
+    return page.view();
+  },
+
+  notes_import_saves_nothing_new: async (page) => {
+    page.replies['/api/recipes/bulk-import'] = { status: 200, body: { recipe_ids: [] } };
+    await page.previewNotes([note(1)], 25, 0, 'my notes');
+    await page.click('importButton');
+    return page.view();
+  },
+
+  notes_box_empty: async (page) => {
+    await page.click('notesPreviewButton');
+    const nothing = page.view();
+    await page.preview(reels(3), 25);
+    page.el('notesInput').value = '  \n ';
+    await page.click('notesPreviewButton');
+    return { nothing, whitespace: page.view(), posts: page.posts };
+  },
+
+  notes_preview_fails: async (page) => {
+    page.replies['/api/recipes/notes-preview'] = { status: 422, body: { error: 'Nothing in these notes can be imported.' } };
+    page.typeNotes('buy butter');
+    await page.click('notesPreviewButton');
+    const failed = page.view();
+    await page.previewNotes([note(1)], 25, 0, 'buy butter and more');
+    return { failed, retried: page.view() };
+  },
+
+  notes_preview_error_is_text: async (page) => {
+    page.replies['/api/recipes/notes-preview'] = { status: 422, body: { error: '<img src=x onerror=alert(1)>' } };
+    page.typeNotes('buy butter');
+    await page.click('notesPreviewButton');
+    return page.view();
+  },
+
+  a_failed_notes_preview_clears_the_one_before: async (page) => {
+    await page.previewNotes([note(1)], 25, 0);
+    page.replies['/api/recipes/notes-preview'] = { status: 500, body: { error: 'Something went wrong. Try again.' } };
+    await page.click('notesPreviewButton');
+    return page.view();
+  },
+
+  note_rows_are_text_not_html: async (page) => {
+    const text = '<b>x</b> "quoted" ' + 'y'.repeat(400);
+    await page.previewNotes([{ kind: 'note', text, title: '<img src=x onerror=alert(1)>', url: '', platform: 'notes' }], 25, 0);
+    return page.view();
+  },
+
+  editing_the_notes_clears_the_preview: async (page) => {
+    await page.previewNotes(notes(2), 25, 2, 'my notes');
+    page.typeNotes('my notes, edited');
+    return page.view();
+  },
+
+  busy_notes_preview: async (page) => {
+    let answer;
+    page.replies['/api/recipes/notes-preview'] = {
+      status: 200, body: { limit: 25, links: [note(1)], skipped: 0 }, wait: new Promise((resolve) => { answer = resolve; }),
+    };
+    page.typeNotes('my notes');
+    const waiting = page.click('notesPreviewButton');
+    await page.settle();
+    const during = page.view();
+    await page.click('notesPreviewButton');
+    await page.call('previewNotes()');
+    await page.click('previewButton');
+    answer();
+    await waiting;
+    return { during, posts: page.posts, after: page.view() };
+  },
+
+  notes_already_saved: async (page) => {
+    page.replies['/api/recipes/bulk-import'] = { status: 200, body: { recipe_ids: [1] } };
+    await page.previewNotes(withSaved(notes(3), 2), 25, 0);
+    const view = page.view();
+    await page.click('importButton');
+    return { view, posts: page.posts };
+  },
+
+  a_long_list_of_notes: async (page) => {
+    page.replies['/api/recipes/bulk-import'] = { status: 200, body: { recipe_ids: [1] } };
+    await page.previewNotes(notes(30), 25, 0);
+    const start = page.view();
+    await page.click('importButton');
+    return { start, posts: page.posts };
   },
 
   nothing_to_import: async (page) => {
@@ -694,3 +839,194 @@ def test_the_import_does_nothing_with_nothing_ticked_or_too_many_ticked(screens)
     result = screens["nothing_to_import"]
     assert result["sentWithNothingTicked"] == 1  # only the preview
     assert result["sentWithTooMany"] == 1
+
+
+# ---------- notes pasted into the box ----------
+
+NOTES_PREVIEW = "/api/recipes/notes-preview"
+
+
+def note_text(i):
+    return f"Recipe {i}\nIngredients and steps for recipe {i}."
+
+
+def test_the_import_box_has_a_button_for_previewing_notes_and_a_box_to_paste_them_in():
+    page = PAGE.read_text(encoding="utf-8")
+    assert re.search(r'<button id="notesPreviewButton"[^>]*>Preview notes</button>', page)
+    box = re.search(r'<textarea id="notesInput"[^>]*>', page).group(0)
+    assert "Paste your notes here." in box
+    assert "Put a line with --- between one note and the next." in box
+
+
+def test_the_import_box_explains_how_notes_are_read():
+    page = PAGE.read_text(encoding="utf-8")
+    help_text = re.search(r"<p[^>]*>(Notes: [^<]*)</p>", page).group(1)
+    assert help_text.startswith("Notes: paste them into the box and press Preview notes.")
+    assert "Put a line with --- between one note and the next." in help_text
+    assert "A note with a TikTok or Instagram link and a few words is imported as that link." in help_text
+    assert "A note with a whole recipe written out (at least 80 characters) is saved as it is, with or without a link" in help_text
+    assert "A note with several links is read as a list of links, and a note with neither is left out." in help_text
+
+
+def test_pasted_notes_are_sent_to_the_notes_preview_as_json(screens):
+    posts = screens["notes_listed"]["posts"]
+    assert posts == [{"url": NOTES_PREVIEW, "method": "POST", "headers": {"Content-Type": "application/json"}, "body": {"text": "my notes"}}]
+
+
+def test_every_note_and_link_in_the_notes_is_listed_and_starts_ticked(screens):
+    view = screens["notes_listed"]["view"]
+    assert view["panel"] == "block"
+    assert view["urls"] == [reel(1), "Recipe 1", "Recipe 2"]
+    assert view["ticked"] == [True, True, True]
+    assert view["summary"] == "Found 3 recipes."
+    assert view["importLabel"] == "Import 3 recipes"
+    assert view["message"] == ""
+
+
+def test_a_note_is_marked_as_a_note_and_a_link_by_its_platform(screens):
+    pills = re.findall(r'<span class="status-tag status-pending">([^<]*)</span>', screens["notes_listed"]["view"]["listHtml"])
+    assert pills == ["instagram", "note", "note"]
+
+
+def test_the_notes_stay_in_the_box_after_previewing(screens):
+    assert screens["notes_listed"]["view"]["notesText"] == "my notes"
+
+
+def test_the_summary_says_how_many_notes_were_left_out(screens):
+    why = "since a note needs a TikTok or Instagram link or a whole recipe written out."
+    assert screens["notes_left_out"]["one"]["summary"] == f"Found 1 recipe. 1 note was left out, {why}"
+    assert screens["notes_left_out"]["three"]["summary"] == f"Found 1 recipe. 3 notes were left out, {why}"
+    assert screens["notes_left_out"]["none"]["summary"] == "Found 1 recipe."
+
+
+def test_the_notes_that_were_left_out_are_forgotten_when_the_preview_is_cleared(screens):
+    assert "left out" not in screens["editing_the_notes_clears_the_preview"]["summary"]
+
+
+def test_the_ticked_notes_and_links_are_sent_apart_to_the_import(screens):
+    result = screens["notes_import_chosen"]
+    assert [post["url"] for post in result["posts"]] == [NOTES_PREVIEW, IMPORT]
+    assert result["posts"][1]["method"] == "POST"
+    assert result["posts"][1]["headers"] == {"Content-Type": "application/json"}
+    assert result["posts"][1]["body"] == {"links": [reel(1)], "notes": [note_text(2)]}
+
+
+def test_only_notes_are_sent_with_an_empty_list_of_links(screens):
+    assert screens["notes_import_only_notes"][1]["body"] == {"links": [], "notes": [note_text(1), note_text(2)]}
+
+
+def test_after_importing_notes_the_box_and_the_page_move_on(screens):
+    view = screens["notes_import_chosen"]["view"]
+    assert view["location"] == "/bulk-review?ids=5,6"
+    assert view["notesText"] == ""
+    assert view["chosenFile"] == ""
+    assert view["panel"] == "none"
+
+
+def test_when_importing_notes_saves_nothing_new_the_box_is_emptied_and_the_page_stays(screens):
+    view = screens["notes_import_saves_nothing_new"]
+    assert "Nothing new was saved" in view["message"]
+    assert view["notesText"] == ""
+    assert view["location"] is None
+
+
+def test_a_failed_import_of_notes_keeps_the_notes_and_the_list(screens):
+    view = screens["notes_import_fails"]
+    assert "Too many recipes in one import (the limit is 25)" in view["message"]
+    assert view["notesText"] == "my notes"
+    assert view["ticked"] == [True, True]
+    assert view["importDisabled"] is False
+
+
+def test_pressing_preview_notes_with_nothing_pasted_asks_for_notes_and_sends_nothing(screens):
+    result = screens["notes_box_empty"]
+    for view in (result["nothing"], result["whitespace"]):
+        assert "Paste your notes first." in view["message"]
+        assert view["panel"] == "none"
+    assert len(result["posts"]) == 1
+
+
+def test_pressing_preview_notes_with_nothing_pasted_also_clears_the_list_before(screens):
+    whitespace = screens["notes_box_empty"]["whitespace"]
+    assert whitespace["urls"] == []
+    assert whitespace["importDisabled"] is True
+
+
+def test_notes_that_cannot_be_previewed_say_why_and_show_no_list(screens):
+    failed = screens["notes_preview_fails"]["failed"]
+    assert "Nothing in these notes can be imported." in failed["message"]
+    assert failed["panel"] == "none"
+    assert failed["notesText"] == "buy butter"
+
+
+def test_previewing_notes_again_after_a_failure_works(screens):
+    retried = screens["notes_preview_fails"]["retried"]
+    assert retried["urls"] == ["Recipe 1"]
+    assert retried["message"] == ""
+
+
+def test_the_message_for_notes_that_cannot_be_previewed_is_text_not_html(screens):
+    message = screens["notes_preview_error_is_text"]["message"]
+    assert "<img" not in message
+    assert "&lt;img src=x onerror=alert(1)&gt;" in message
+
+
+def test_a_failed_notes_preview_removes_the_list_from_the_one_before(screens):
+    view = screens["a_failed_notes_preview_clears_the_one_before"]
+    assert view["panel"] == "none"
+    assert view["urls"] == []
+    assert "Something went wrong" in view["message"]
+
+
+def test_the_title_and_text_of_a_note_are_shown_as_text_not_html(screens):
+    view = screens["note_rows_are_text_not_html"]
+    assert "<img" not in view["listHtml"]
+    assert "<b>" not in view["listHtml"]
+    assert view["urls"] == ["&lt;img src=x onerror=alert(1)&gt;"]
+
+
+def test_a_note_shows_the_start_of_its_text_when_the_pointer_rests_on_it(screens):
+    listed = screens["note_rows_are_text_not_html"]["listHtml"]
+    hint = re.search(r'<span class="import-url" title="([^"]*)"', listed).group(1)
+    assert html.unescape(hint) == ('<b>x</b> "quoted" ' + "y" * 400)[:300]
+
+
+def test_changing_the_notes_clears_the_preview_of_the_old_ones(screens):
+    view = screens["editing_the_notes_clears_the_preview"]
+    assert view["panel"] == "none"
+    assert view["urls"] == []
+    assert view["summary"] == ""
+    assert view["importDisabled"] is True
+    assert view["notesText"] == "my notes, edited"
+
+
+def test_while_notes_are_being_read_both_preview_buttons_are_off_and_nothing_is_sent_twice(screens):
+    result = screens["busy_notes_preview"]
+    assert result["during"]["previewDisabled"] is True
+    assert result["during"]["notesPreviewDisabled"] is True
+    assert "Reading your notes" in result["during"]["message"]
+    assert len(result["posts"]) == 1
+    assert result["after"]["previewDisabled"] is False
+    assert result["after"]["notesPreviewDisabled"] is False
+    assert result["after"]["urls"] == ["Recipe 1"]
+
+
+def test_notes_already_saved_are_marked_unticked_and_locked_like_links(screens):
+    result = screens["notes_already_saved"]
+    view = result["view"]
+    assert view["markedSaved"] == [False, True, False]
+    assert view["ticked"] == [True, False, True]
+    assert view["locked"] == [False, True, False]
+    assert view["summary"] == "Found 3 recipes. 1 already saved."
+    assert result["posts"][1]["body"] == {"links": [], "notes": [note_text(1), note_text(3)]}
+
+
+def test_a_long_list_of_notes_is_limited_like_a_long_list_of_links(screens):
+    result = screens["a_long_list_of_notes"]
+    assert result["start"]["ticked"] == [True] * 25 + [False] * 5
+    assert "You can import 25 at a time, so the first 25 are ticked." in result["start"]["summary"]
+    assert result["posts"][1]["body"] == {"links": [], "notes": [note_text(i) for i in range(1, 26)]}
+
+
+def test_the_notes_are_sent_exactly_as_they_were_typed(screens):
+    assert screens["notes_sent_as_typed"][0]["body"] == {"text": "\n  my notes  \n"}

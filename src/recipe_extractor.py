@@ -49,42 +49,63 @@ def parse_extraction_response(text: str) -> dict:
     }
 
 
-def extract_recipe(caption_text: str) -> dict:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ExtractionError("Recipe extraction requires an ANTHROPIC_API_KEY to be set.")
+# What the model is told about each kind of text it is given. A note can hold a longer recipe than
+# a caption does, so its answer gets more room.
+KINDS = {
+    "caption": {
+        "intro": "Here is a caption from a social media food video:",
+        "noun": "caption",
+        "not_a_recipe": "wrong kind of video, no food content, or too vague to extract anything useful",
+        "max_tokens": 800,
+    },
+    "note": {
+        "intro": "Here is a note someone saved:",
+        "noun": "note",
+        "not_a_recipe": "no food content, or too vague to extract anything useful",
+        "max_tokens": 2000,
+    },
+}
 
-    prompt = (
-        "Here is a caption from a social media food video:\n\n"
-        f"{caption_text}\n\n"
-        "Does this caption contain an actual recipe (ingredients and/or "
+
+def build_prompt(text: str, kind: str = "caption") -> str:
+    """What the model is asked about a social media caption or about a note someone wrote."""
+    noun = KINDS[kind]["noun"]
+    return (
+        f"{KINDS[kind]['intro']}\n\n"
+        f"{text}\n\n"
+        f"Does this {noun} contain an actual recipe (ingredients and/or "
         "cooking steps), even if informally written? Respond with ONLY a "
         "JSON object, no other text, no markdown fences.\n\n"
-        "If it does NOT contain a recipe (wrong kind of video, no food "
-        "content, or too vague to extract anything useful), respond with:\n"
+        f"If it does NOT contain a recipe ({KINDS[kind]['not_a_recipe']}), respond with:\n"
         '{"has_recipe": false, "reason": "<brief explanation>"}\n\n'
         "If it DOES contain a recipe, respond with:\n"
         '{"has_recipe": true, "title": "<short recipe name>", '
         '"ingredients": ["<ingredient with measurement>", ...], '
         '"directions": ["<step 1>", "<step 2>", ...]}\n\n'
         "Only include ingredients and steps actually stated or strongly "
-        "implied in the caption - do not invent measurements or steps "
+        f"implied in the {noun} - do not invent measurements or steps "
         "that aren't there. If a measurement isn't given, just list the "
         "ingredient name."
     )
+
+
+def extract_recipe(text: str, kind: str = "caption") -> dict:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ExtractionError("Recipe extraction requires an ANTHROPIC_API_KEY to be set.")
 
     try:
         client = anthropic.Anthropic()
         response = client.messages.create(
             model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5"),
-            max_tokens=800,
-            messages=[{"role": "user", "content": prompt}],
+            max_tokens=KINDS[kind]["max_tokens"],
+            messages=[{"role": "user", "content": build_prompt(text, kind)}],
         )
-        text = "".join(block.text for block in response.content if block.type == "text")
+        answer = "".join(block.text for block in response.content if block.type == "text")
     except Exception as e:
         raise ExtractionError(f"Could not reach the extraction service: {type(e).__name__}: {e}")
 
     try:
-        return parse_extraction_response(text)
+        return parse_extraction_response(answer)
     except json.JSONDecodeError:
-        raise ExtractionError("Could not parse a valid response for this caption")
+        raise ExtractionError(f"Could not parse a valid response for this {KINDS[kind]['noun']}")

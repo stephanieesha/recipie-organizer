@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from db import get_connection, init_db
+from notes_parser import note_key
 from recipe_storage import (
     add_recipe, update_recipe_extracted, mark_recipe_needs_manual,
     update_recipe_manual, get_recipes, get_recipe, delete_recipe,
@@ -200,3 +201,65 @@ def test_a_removed_recipe_is_no_longer_saved(conn):
     recipe = add_recipe(conn, "https://www.instagram.com/reel/AAA/", "instagram", user_id=1)
     delete_recipe(conn, recipe["id"], user_id=1)
     assert saved_links(conn, user_id=1) == {}
+
+
+# ---------- recipes written in notes ----------
+
+NOTE = "Garlic noodles\nBoil 200g noodles, fry 4 cloves of garlic in butter, add soy sauce and toss it all together."
+
+
+def test_a_recipe_can_be_added_with_a_title_before_it_is_read(conn):
+    recipe = add_recipe(conn, "", "notes", caption_raw=NOTE, title="Garlic noodles")
+    assert recipe["title"] == "Garlic noodles"
+    assert recipe["status"] == "pending"
+    assert recipe["source_url"] == ""
+    assert recipe["platform"] == "notes"
+    assert recipe["caption_raw"] == NOTE
+
+
+def test_a_recipe_added_without_a_title_has_none(conn):
+    assert add_recipe(conn, "https://www.tiktok.com/@x/video/1", "tiktok")["title"] is None
+
+
+def test_reading_a_recipe_replaces_the_title_it_was_added_with(conn):
+    recipe = add_recipe(conn, "", "notes", caption_raw=NOTE, title="Garlic noodles")
+    done = update_recipe_extracted(conn, recipe["id"], "Buttery garlic noodles", ["noodles"], ["Boil"])
+    assert done["title"] == "Buttery garlic noodles"
+
+
+def test_a_recipe_that_could_not_be_read_keeps_the_title_it_was_added_with(conn):
+    recipe = add_recipe(conn, "", "notes", caption_raw=NOTE, title="Garlic noodles")
+    stuck = mark_recipe_needs_manual(conn, recipe["id"])
+    assert (stuck["status"], stuck["title"]) == ("needs_manual", "Garlic noodles")
+
+
+def test_a_recipe_with_no_link_is_saved_by_its_words(conn):
+    note = add_recipe(conn, "", "notes", caption_raw=NOTE, user_id=1)
+    assert saved_links(conn, user_id=1) == {note_key(NOTE): note["id"]}
+
+
+def test_a_recipe_with_no_link_is_found_again_however_its_words_are_spaced_or_capitalised(conn):
+    note = add_recipe(conn, "", "notes", caption_raw=NOTE, user_id=1)
+    assert saved_links(conn, user_id=1)[note_key(NOTE.upper().replace("\n", "\n\n "))] == note["id"]
+
+
+def test_a_note_saved_twice_is_listed_with_its_oldest_recipe(conn):
+    older = add_recipe(conn, "", "notes", caption_raw=NOTE, user_id=1)
+    add_recipe(conn, "", "notes", caption_raw=NOTE, user_id=1)
+    assert saved_links(conn, user_id=1) == {note_key(NOTE): older["id"]}
+
+
+def test_a_recipe_with_a_link_is_saved_by_its_link_not_by_its_caption(conn):
+    recipe = add_recipe(conn, "https://www.instagram.com/reel/AAA/", "instagram", caption_raw=NOTE, user_id=1)
+    assert saved_links(conn, user_id=1) == {"instagram:AAA": recipe["id"]}
+
+
+def test_a_recipe_with_a_link_that_is_not_one_post_is_not_saved_by_its_caption(conn):
+    add_recipe(conn, "https://www.instagram.com/chef_one/", "instagram", caption_raw=NOTE, user_id=1)
+    assert saved_links(conn, user_id=1) == {}
+
+
+def test_only_that_persons_notes_are_listed(conn):
+    add_recipe(conn, "", "notes", caption_raw=NOTE, user_id=1)
+    mine = add_recipe(conn, "", "notes", caption_raw=NOTE + " Serves two.", user_id=2)
+    assert saved_links(conn, user_id=2) == {note_key(NOTE + " Serves two."): mine["id"]}

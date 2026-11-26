@@ -71,12 +71,17 @@
         <button onclick="submitCaption()" style="margin-top:8px;">Extract recipe</button>
       </div>
 
-      <span class="bulk-toggle" onclick="toggleBulk()">Have a backlog? Bulk import from your data export</span>
+      <span class="bulk-toggle" onclick="toggleBulk()">Have a backlog? Bulk import from your data export or your notes</span>
       <div class="bulk-section" id="bulkSection">
         <div id="bulkMessage"></div>
         <div class="form-row">
           <input type="file" id="bulkFileInput" accept=".json,.txt,.html" onchange="cancelPreview()" />
           <button id="previewButton" onclick="previewImport()">Preview</button>
+        </div>
+        <p style="font-size:12px; margin:4px 0;">Or paste your notes:</p>
+        <textarea id="notesInput" placeholder="Paste your notes here. Put a line with --- between one note and the next." oninput="cancelPreview()" style="margin-bottom:8px;"></textarea>
+        <div class="form-row">
+          <button id="notesPreviewButton" onclick="previewNotes()">Preview notes</button>
         </div>
         <div class="import-preview" id="importPreview">
           <div id="importSummary"></div>
@@ -94,6 +99,7 @@
         <p style="font-size:11px; color:#7C5A67;">Instagram: in the app, open Settings, then Accounts Center, Your information and permissions, Download your information. Choose JSON as the format, then upload the saved_posts.json file from the download. Instagram posts are added without a caption, so you paste each caption in afterward.</p>
         <p style="font-size:11px; color:#7C5A67;">TikTok: in the app, open Profile, then the menu, Settings and privacy, Account, Download your data. Choose JSON as the file format, wait for TikTok to prepare it (this can take a few days), then upload the user_data.json file from the download. Only your favorites, the videos you saved with the bookmark button, are imported, not your likes or watch history. TikTok videos are filled in automatically.</p>
         <p style="font-size:11px; color:#7C5A67;">A text file with one link per line works too.</p>
+        <p style="font-size:11px; color:#7C5A67;">Notes: paste them into the box and press Preview notes. Put a line with --- between one note and the next. A note with a TikTok or Instagram link and a few words is imported as that link. A note with a whole recipe written out (at least 80 characters) is saved as it is, with or without a link, and the AI reads out the ingredients and steps. A note with several links is read as a list of links, and a note with neither is left out.</p>
       </div>
     </div>
 
@@ -265,16 +271,23 @@
       section.style.display = section.style.display === 'block' ? 'none' : 'block';
     }
 
-    // The import: a file is read first, what it holds is listed with a tick box for each recipe,
-    // and only the ticked ones are saved.
+    // The import: a file or some pasted notes are read first, what they hold is listed with a tick
+    // box for each recipe, and only the ticked ones are saved. Each row is a link, or a note: a
+    // recipe written out, which is saved as it is written.
     let importLinks = [];
     let importChosen = new Set();
     let importLimit = 0;
+    let importSkipped = 0;
     let importBusy = false;
+
+    function isNote(item) {
+      return item.kind === 'note';
+    }
 
     function setImportBusy(busy) {
       importBusy = busy;
       document.getElementById('previewButton').disabled = busy;
+      document.getElementById('notesPreviewButton').disabled = busy;
       updateImportControls();
     }
 
@@ -283,8 +296,8 @@
       document.getElementById('importList').innerHTML = importLinks.map((link, i) => `
         <label class="import-item ${link.already_saved ? 'import-saved' : ''}">
           <input type="checkbox" ${importChosen.has(i) ? 'checked' : ''} ${link.already_saved ? 'disabled' : ''} onchange="toggleImport(${i})">
-          <span class="status-tag status-pending">${esc(link.platform)}</span>
-          <span class="import-url" title="${esc(link.url)}">${esc(link.url)}</span>
+          <span class="status-tag status-pending">${esc(isNote(link) ? 'note' : link.platform)}</span>
+          <span class="import-url" title="${esc(isNote(link) ? link.text.slice(0, 300) : link.url)}">${esc(isNote(link) ? link.title : link.url)}</span>
           ${link.already_saved ? '<span class="status-tag status-extracted">already saved</span>' : ''}
         </label>
       `).join('');
@@ -305,6 +318,9 @@
       let summary = `Found ${found} ${found === 1 ? 'recipe' : 'recipes'}.`;
       if (fresh < found) {
         summary += ` ${found - fresh} already saved.`;
+      }
+      if (importSkipped > 0) {
+        summary += ` ${importSkipped} ${importSkipped === 1 ? 'note was' : 'notes were'} left out, since a note needs a TikTok or Instagram link or a whole recipe written out.`;
       }
       if (fresh === 0) {
         summary += ' There is nothing new to import.';
@@ -345,6 +361,26 @@
       renderImportPreview();
     }
 
+    async function showPreview(url, options, waiting) {
+      const messageBox = document.getElementById('bulkMessage');
+      messageBox.innerHTML = `<p style="color:#7C5A67;font-size:13px;">${waiting}</p>`;
+      setImportBusy(true);
+
+      const { ok, data } = await sendRequest(url, options);
+      setImportBusy(false);
+
+      if (!ok) {
+        messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
+        return;
+      }
+
+      messageBox.innerHTML = '';
+      importLinks = data.links;
+      importLimit = data.limit;
+      importSkipped = data.skipped;
+      selectImport('all');
+    }
+
     async function previewImport() {
       if (importBusy) return;
       const messageBox = document.getElementById('bulkMessage');
@@ -357,39 +393,46 @@
         return;
       }
 
-      messageBox.innerHTML = '<p style="color:#7C5A67;font-size:13px;">Reading the file...</p>';
-      setImportBusy(true);
-
       const formData = new FormData();
       formData.append('file', fileInput.files[0]);
+      await showPreview('/api/recipes/import-preview', { method: 'POST', body: formData }, 'Reading the file...');
+    }
 
-      const { ok, data } = await sendRequest('/api/recipes/import-preview', { method: 'POST', body: formData });
-      setImportBusy(false);
+    async function previewNotes() {
+      if (importBusy) return;
+      const messageBox = document.getElementById('bulkMessage');
+      const notes = document.getElementById('notesInput').value;
+      messageBox.innerHTML = '';
+      cancelPreview();
 
-      if (!ok) {
-        messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
+      if (!notes.trim()) {
+        messageBox.innerHTML = '<div class="error-box">Paste your notes first.</div>';
         return;
       }
 
-      messageBox.innerHTML = '';
-      importLinks = data.links;
-      importLimit = data.limit;
-      selectImport('all');
+      await showPreview('/api/recipes/notes-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: notes }),
+      }, 'Reading your notes...');
     }
 
     async function importSelected() {
       const tooMany = importLimit > 0 && importChosen.size > importLimit;
       if (importBusy || importChosen.size === 0 || tooMany) return;
       const messageBox = document.getElementById('bulkMessage');
-      const urls = importLinks.filter((link, i) => importChosen.has(i)).map((link) => link.url);
+      const chosen = importLinks.filter((item, i) => importChosen.has(i));
+      const body = { links: chosen.filter((item) => !isNote(item)).map((item) => item.url) };
+      const notes = chosen.filter(isNote).map((item) => item.text);
+      if (notes.length > 0) body.notes = notes;
 
-      messageBox.innerHTML = '<p style="color:#7C5A67;font-size:13px;">Importing - this can take a while, since each TikTok video needs a live lookup...</p>';
+      messageBox.innerHTML = '<p style="color:#7C5A67;font-size:13px;">Importing - this can take a while, since each TikTok video needs a live lookup and each note is read by the AI...</p>';
       setImportBusy(true);
 
       const { ok, data } = await sendRequest('/api/recipes/bulk-import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ links: urls }),
+        body: JSON.stringify(body),
       });
       setImportBusy(false);
 
@@ -400,6 +443,7 @@
 
       const saved = data.recipe_ids || [];
       document.getElementById('bulkFileInput').value = '';
+      document.getElementById('notesInput').value = '';
       cancelPreview();
       if (saved.length > 0) {
         messageBox.innerHTML = `<div class="success-box">Saved ${saved.length} ${saved.length === 1 ? 'recipe' : 'recipes'} - taking you to review and categorize them...</div>`;

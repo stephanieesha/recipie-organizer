@@ -72,6 +72,7 @@ def test_pages_send_a_logged_out_visitor_to_log_in(make_client, page):
     ("put", "/api/recipes/1"), ("delete", "/api/recipes/1"),
     ("patch", "/api/recipes/1/caption"), ("patch", "/api/recipes/1/category"),
     ("post", "/api/recipes/bulk-import"), ("post", "/api/recipes/import-preview"),
+    ("post", "/api/recipes/notes-preview"),
     ("get", "/api/categories"), ("post", "/api/categories"),
     ("delete", "/api/categories/1"), ("get", "/api/categories/1/recipes"),
 ])

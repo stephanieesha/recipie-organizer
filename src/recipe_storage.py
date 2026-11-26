@@ -14,6 +14,7 @@ does not exist (RecipeNotFound).
 
 import json
 
+from notes_parser import note_key
 from url_utils import link_key
 
 
@@ -38,10 +39,11 @@ def _row_to_recipe(row) -> dict:
 
 
 def add_recipe(conn, source_url: str, platform: str, caption_raw: str = None,
-                category_id: int = None, thumbnail_url: str = None, user_id: int = None) -> dict:
+                category_id: int = None, thumbnail_url: str = None, user_id: int = None,
+                title: str = None) -> dict:
     cursor = conn.execute(
-        "INSERT INTO recipes (source_url, platform, caption_raw, status, category_id, thumbnail_url, user_id) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
-        (source_url, platform, caption_raw, category_id, thumbnail_url, user_id),
+        "INSERT INTO recipes (source_url, platform, caption_raw, status, category_id, thumbnail_url, user_id, title) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)",
+        (source_url, platform, caption_raw, category_id, thumbnail_url, user_id, title),
     )
     conn.commit()
     return get_recipe(conn, cursor.lastrowid)
@@ -49,14 +51,20 @@ def add_recipe(conn, source_url: str, platform: str, caption_raw: str = None,
 
 def saved_links(conn, user_id: int = None) -> dict:
     """
-    The posts already saved as recipes, as {link_key: recipe id}. A post saved twice is listed with
-    its oldest recipe. Recipes whose link does not go to one post are left out.
+    The recipes already saved, as {key: recipe id}: the key of the post a recipe came from, or for a
+    recipe written in notes with no link, the key of its text. One saved twice is listed with its
+    oldest recipe. Recipes whose link does not go to one post are left out.
     """
     owned, owner = _owned_by(user_id)
-    rows = conn.execute(f"SELECT id, source_url FROM recipes WHERE 1 = 1{owned} ORDER BY id", owner).fetchall()
+    rows = conn.execute(
+        f"SELECT id, source_url, caption_raw FROM recipes WHERE 1 = 1{owned} ORDER BY id", owner
+    ).fetchall()
     saved = {}
     for row in rows:
-        key = link_key(row["source_url"])
+        if row["source_url"]:
+            key = link_key(row["source_url"])
+        else:
+            key = note_key(row["caption_raw"]) if row["caption_raw"] else None
         if key:
             saved.setdefault(key, row["id"])
     return saved

@@ -17,6 +17,8 @@ import app as app_module  # noqa: E402
 import db  # noqa: E402
 import limits  # noqa: E402
 from import_parser import NO_FAVORITES, NO_LINKS, NO_POSTS, TIKTOK_TEXT_FILE  # noqa: E402
+from notes_parser import NOTHING_TO_IMPORT  # noqa: E402
+from recipe_extractor import ExtractionError, NoRecipeFoundError  # noqa: E402
 from tiktok_oembed import TikTokFetchError  # noqa: E402
 
 REEL = "https://www.instagram.com/reel/DQ6rx2JDxFR/"
@@ -225,7 +227,7 @@ def test_each_favorite_is_looked_up_and_its_recipe_filled_in(client, monkeypatch
         looked_up.append(url)
         return {"caption": "Garlic bread: butter, garlic, bread", "thumbnail_url": "https://example.com/cover.jpg"}
 
-    def fake_extraction(caption):
+    def fake_extraction(caption, kind):
         return {"title": "Garlic bread", "ingredients": ["butter", "garlic", "bread"], "directions": ["Mix", "Bake"]}
 
     monkeypatch.setattr(app_module, "fetch_tiktok_data", fake_lookup)
@@ -293,7 +295,7 @@ def test_the_preview_lists_the_recipes_in_a_file_and_saves_nothing(client):
 def test_the_preview_of_a_tiktok_file_lists_only_the_favorites_and_looks_nothing_up(client, monkeypatch):
     calls = []
     monkeypatch.setattr(app_module, "fetch_tiktok_data", lambda url: calls.append(url))
-    monkeypatch.setattr(app_module, "extract_recipe", lambda caption: calls.append(caption))
+    monkeypatch.setattr(app_module, "extract_recipe", lambda caption, kind: calls.append(caption))
 
     response = preview(client, tiktok_data(FAVORITES, LIKES, HISTORY), "user_data.json")
 
@@ -366,7 +368,7 @@ def test_chosen_tiktok_videos_are_looked_up_and_filled_in(client, monkeypatch):
         return {"caption": "Garlic bread: butter, garlic, bread", "thumbnail_url": "https://example.com/cover.jpg"}
 
     monkeypatch.setattr(app_module, "fetch_tiktok_data", fake_lookup)
-    monkeypatch.setattr(app_module, "extract_recipe", lambda caption: {"title": "Garlic bread", "ingredients": ["butter"], "directions": ["Bake"]})
+    monkeypatch.setattr(app_module, "extract_recipe", lambda caption, kind: {"title": "Garlic bread", "ingredients": ["butter"], "directions": ["Bake"]})
 
     summary = import_chosen(client, FAVORITES[:2]).get_json()
 
@@ -579,3 +581,333 @@ def test_a_file_in_which_every_post_is_saved_already_is_still_a_normal_answer(cl
     assert response.status_code == 200
     assert response.get_json()["already_saved"] == 2
     assert response.get_json()["recipe_ids"] == []
+
+
+# ---------- notes: pasted, previewed, and imported ----------
+
+NOTE = (
+    "Garlic noodles\n\n"
+    "Ingredients: 200g noodles, 4 cloves garlic, 2 tbsp soy sauce, 2 tbsp butter\n"
+    "Boil the noodles. Fry the garlic in the butter, add the soy sauce and toss it all together."
+)
+OTHER_NOTE = NOTE.replace("Garlic noodles", "Chili noodles")
+NOT_ONE_NOTE = "One of the chosen notes is not a single recipe written out"
+
+
+@pytest.fixture
+def reading(monkeypatch):
+    """A stand-in for the model. It records what it was given, and reads every recipe as Pancakes."""
+    given = []
+
+    def read(text, kind):
+        given.append((text, kind))
+        return {"title": "Pancakes", "ingredients": ["flour", "eggs"], "directions": ["Mix", "Fry"]}
+
+    monkeypatch.setattr(app_module, "extract_recipe", read)
+    return given
+
+
+def preview_notes(client, text):
+    return client.post("/api/recipes/notes-preview", json={"text": text})
+
+
+def import_notes(client, notes, links=None):
+    body = {"notes": notes}
+    if links is not None:
+        body["links"] = links
+    return client.post("/api/recipes/bulk-import", json=body)
+
+
+def all_recipes(client):
+    return sorted(client.get("/api/recipes").get_json(), key=lambda r: r["id"])
+
+
+def test_the_notes_preview_lists_links_and_recipes_written_out_in_the_order_they_are_written(client):
+    text = f"{REEL}\n---\n{NOTE}\n---\n{TIKTOK}\n---\nbuy butter"
+    response = preview_notes(client, text)
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "limit": 0,
+        "skipped": 1,
+        "links": [
+            {"url": REEL, "platform": "instagram", "already_saved": False},
+            {"kind": "note", "text": NOTE, "title": "Garlic noodles", "url": "", "platform": "notes", "already_saved": False},
+            {"url": TIKTOK, "platform": "tiktok", "already_saved": False},
+        ],
+    }
+
+
+def test_the_notes_preview_saves_nothing_and_asks_nobody(client, monkeypatch, reading):
+    asked = []
+    monkeypatch.setattr(app_module, "fetch_tiktok_data", lambda url: asked.append(url))
+    assert preview_notes(client, f"{TIKTOK}\n---\n{NOTE}").status_code == 200
+    assert asked == [] and reading == []
+    assert all_recipes(client) == []
+
+
+def test_the_notes_preview_says_what_the_import_limit_is(client, monkeypatch):
+    monkeypatch.setenv("MAX_BULK_LINKS", "7")
+    assert preview_notes(client, REEL).get_json()["limit"] == 7
+
+
+def test_the_notes_preview_marks_what_is_already_saved(client, reading):
+    import_chosen(client, [REEL])
+    import_notes(client, [NOTE])
+    items = preview_notes(client, f"{REEL}\n---\n{NOTE}\n---\n{OTHER_NOTE}\n---\n{POST}").get_json()["links"]
+    assert [item["already_saved"] for item in items] == [True, True, False, False]
+
+
+def test_a_note_with_its_link_is_marked_saved_when_that_post_is_saved(client):
+    import_chosen(client, [TIKTOK])
+    text = NOTE + "\n" + TIKTOK
+    assert preview_notes(client, text).get_json()["links"] == [
+        {"kind": "note", "text": text, "title": "Garlic noodles", "url": TIKTOK, "platform": "tiktok", "already_saved": True},
+    ]
+
+
+def test_another_persons_recipes_do_not_mark_a_note_as_saved(client, other_client, reading):
+    import_notes(other_client, [NOTE])
+    assert preview_notes(client, NOTE).get_json()["links"][0]["already_saved"] is False
+
+
+@pytest.mark.parametrize("body", [{}, {"text": ""}, {"text": "  \n "}, {"text": None}, {"text": 5}, {"text": [NOTE]}, [NOTE], None, "text", 5])
+def test_the_notes_preview_wants_some_text(client, body):
+    response = client.post("/api/recipes/notes-preview", data=json.dumps(body), content_type="application/json")
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Paste your notes first"}
+
+
+def test_the_notes_preview_wants_json(client):
+    response = client.post("/api/recipes/notes-preview", data=NOTE, content_type="text/plain")
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Paste your notes first"}
+
+
+@pytest.mark.parametrize("text", ["buy butter", PROFILE, "---", "x" * 6000])
+def test_notes_with_nothing_to_import_are_explained(client, text):
+    response = preview_notes(client, text)
+    assert response.status_code == 422
+    assert response.get_json() == {"error": NOTHING_TO_IMPORT}
+
+
+def test_a_note_is_saved_as_a_recipe_read_by_the_model(client, reading):
+    response = import_notes(client, [NOTE])
+    assert response.status_code == 200
+    summary = response.get_json()
+    assert summary == {"total_found": 1, "already_saved": 0, "extracted": 1, "needs_caption": 0, "needs_manual": 0, "recipe_ids": summary["recipe_ids"]}
+    assert reading == [(NOTE, "note")]
+    (recipe,) = all_recipes(client)
+    assert recipe["id"] == summary["recipe_ids"][0]
+    assert (recipe["platform"], recipe["source_url"], recipe["status"]) == ("notes", "", "extracted")
+    assert (recipe["title"], recipe["ingredients"], recipe["directions"]) == ("Pancakes", ["flour", "eggs"], ["Mix", "Fry"])
+    assert recipe["caption_raw"] == NOTE
+    assert recipe["thumbnail_url"] is None
+
+
+def test_a_note_with_the_link_it_came_from_keeps_the_link_and_is_not_looked_up(client, monkeypatch, reading):
+    looked_up = []
+    monkeypatch.setattr(app_module, "fetch_tiktok_data", lambda url: looked_up.append(url))
+    summary = import_notes(client, [NOTE + "\n" + TIKTOK, OTHER_NOTE + "\n" + REEL]).get_json()
+    assert looked_up == []
+    assert (summary["extracted"], summary["needs_caption"], summary["needs_manual"]) == (2, 0, 0)
+    tiktok_note, instagram_note = all_recipes(client)
+    assert (tiktok_note["platform"], tiktok_note["source_url"], tiktok_note["caption_raw"]) == ("tiktok", TIKTOK, NOTE + "\n" + TIKTOK)
+    assert (instagram_note["platform"], instagram_note["source_url"]) == ("instagram", REEL)
+    assert [text for text, kind in reading] == [NOTE + "\n" + TIKTOK, OTHER_NOTE + "\n" + REEL]
+
+
+def test_links_and_notes_chosen_together_are_all_saved_links_first(client, reading):
+    summary = import_notes(client, [NOTE, OTHER_NOTE], links=[REEL, POST]).get_json()
+    assert summary["total_found"] == 4
+    assert (summary["extracted"], summary["needs_caption"], summary["already_saved"]) == (2, 2, 0)
+    assert [r["platform"] for r in all_recipes(client)] == ["instagram", "instagram", "notes", "notes"]
+    assert [r["id"] for r in all_recipes(client)] == summary["recipe_ids"]
+    assert [text for text, kind in reading] == [NOTE, OTHER_NOTE]
+
+
+def test_a_note_the_model_finds_no_recipe_in_is_kept_for_filling_in_by_hand(client, monkeypatch):
+    def no_recipe(text, kind):
+        raise NoRecipeFoundError("This is a shopping list")
+
+    monkeypatch.setattr(app_module, "extract_recipe", no_recipe)
+    summary = import_notes(client, [NOTE]).get_json()
+    assert (summary["extracted"], summary["needs_manual"]) == (0, 1)
+    (recipe,) = all_recipes(client)
+    assert (recipe["status"], recipe["title"], recipe["caption_raw"]) == ("needs_manual", "Garlic noodles", NOTE)
+
+
+def test_a_note_the_model_cannot_be_asked_about_is_kept_for_filling_in_by_hand(client, monkeypatch):
+    def unreachable(text, kind):
+        raise ExtractionError("Could not reach the extraction service")
+
+    monkeypatch.setattr(app_module, "extract_recipe", unreachable)
+    summary = import_notes(client, [NOTE, OTHER_NOTE]).get_json()
+    assert (summary["extracted"], summary["needs_manual"]) == (0, 2)
+    assert [(r["status"], r["title"]) for r in all_recipes(client)] == [("needs_manual", "Garlic noodles"), ("needs_manual", "Chili noodles")]
+
+
+def test_without_an_api_key_the_notes_are_kept_for_filling_in_by_hand(client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    summary = import_notes(client, [NOTE]).get_json()
+    assert (summary["extracted"], summary["needs_manual"]) == (0, 1)
+    assert all_recipes(client)[0]["status"] == "needs_manual"
+
+
+def test_a_note_after_the_daily_limit_is_kept_without_asking_the_model(client, monkeypatch, reading):
+    monkeypatch.setenv("DAILY_AI_LIMIT", "1")
+    summary = import_notes(client, [NOTE, OTHER_NOTE]).get_json()
+    assert (summary["extracted"], summary["needs_manual"]) == (1, 1)
+    assert reading == [(NOTE, "note")]
+    assert [(r["status"], r["title"]) for r in all_recipes(client)] == [("extracted", "Pancakes"), ("needs_manual", "Chili noodles")]
+
+
+def test_a_note_saved_before_is_not_saved_or_read_again(client, reading):
+    first = import_notes(client, [NOTE]).get_json()["recipe_ids"]
+    summary = import_notes(client, [NOTE, OTHER_NOTE]).get_json()
+    assert (summary["total_found"], summary["already_saved"], summary["extracted"]) == (2, 1, 1)
+    assert len(summary["recipe_ids"]) == 1 and summary["recipe_ids"] != first
+    assert reading == [(NOTE, "note"), (OTHER_NOTE, "note")]
+    assert len(all_recipes(client)) == 2
+
+
+def test_a_note_saved_before_is_known_by_its_words_not_its_spacing(client, reading):
+    import_notes(client, [NOTE])
+    summary = import_notes(client, [NOTE.upper().replace("\n", "\n\n")]).get_json()
+    assert (summary["already_saved"], summary["recipe_ids"]) == (1, [])
+
+
+def test_the_same_note_chosen_twice_is_saved_once_as_it_was_first_chosen(client, reading):
+    summary = import_notes(client, [NOTE, NOTE, NOTE.lower()]).get_json()
+    assert (summary["total_found"], summary["extracted"], summary["already_saved"]) == (1, 1, 0)
+    assert reading == [(NOTE, "note")]
+    assert [r["caption_raw"] for r in all_recipes(client)] == [NOTE]
+
+
+def test_a_note_for_a_post_that_is_already_saved_is_not_saved_again(client, reading):
+    import_chosen(client, [TIKTOK])
+    summary = import_notes(client, [NOTE + "\n" + TIKTOK]).get_json()
+    assert (summary["already_saved"], summary["extracted"], summary["recipe_ids"]) == (1, 0, [])
+    assert reading == []
+
+
+def test_a_link_and_a_note_for_the_same_post_chosen_together_are_one_recipe(client, reading):
+    summary = import_notes(client, [NOTE + "\n" + REEL], links=[REEL]).get_json()
+    assert (summary["total_found"], summary["needs_caption"], summary["already_saved"], summary["extracted"]) == (2, 1, 1, 0)
+    assert len(all_recipes(client)) == 1
+
+
+def test_the_notes_chosen_belong_to_the_person_who_imported_them(client, other_client, reading):
+    import_notes(client, [NOTE])
+    assert other_client.get("/api/recipes").get_json() == []
+    assert len(all_recipes(client)) == 1
+
+
+def test_a_note_is_saved_as_the_preview_listed_it(client, reading):
+    import_notes(client, ["\n\n  " + NOTE.replace("\n", "\r\n") + "  \n\n"])
+    assert all_recipes(client)[0]["caption_raw"] == NOTE
+    assert reading == [(NOTE, "note")]
+
+
+@pytest.mark.parametrize("text", [
+    NOTE,
+    NOTE + "\n" + TIKTOK,
+    "# Chili\r\n" + NOTE.replace("\n", "\r\n") + "\r\n" + REEL,
+])
+def test_every_note_the_preview_lists_can_be_imported(client, reading, text):
+    (item,) = preview_notes(client, text).get_json()["links"]
+    assert import_notes(client, [item["text"]]).status_code == 200
+    assert len(all_recipes(client)) == 1
+
+
+def test_more_chosen_recipes_than_the_limit_are_refused_and_nothing_is_saved(client, monkeypatch, reading):
+    monkeypatch.setenv("MAX_BULK_LINKS", "2")
+    response = import_notes(client, [NOTE, OTHER_NOTE], links=[REEL])
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Too many recipes in one import (the limit is 2)"}
+    assert all_recipes(client) == [] and reading == []
+
+
+def test_exactly_the_limit_of_links_and_notes_together_is_accepted(client, monkeypatch, reading):
+    monkeypatch.setenv("MAX_BULK_LINKS", "2")
+    assert import_notes(client, [NOTE], links=[REEL]).status_code == 200
+    assert len(all_recipes(client)) == 2
+
+
+def test_the_limit_counts_a_note_chosen_twice_once(client, monkeypatch, reading):
+    monkeypatch.setenv("MAX_BULK_LINKS", "1")
+    assert import_notes(client, [NOTE, NOTE]).status_code == 200
+
+
+@pytest.mark.parametrize("body", [{"notes": []}, {"notes": None}, {"links": [], "notes": []}, {"links": None, "notes": None}])
+def test_no_links_and_no_notes_chosen_is_refused(client, body):
+    response = send_json(client, body)
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Choose at least one recipe to import"}
+
+
+@pytest.mark.parametrize("bad", [
+    "buy butter",
+    REEL,
+    NOTE + "\n" + REEL + "\n" + TIKTOK,
+    NOTE + "\n---\n" + OTHER_NOTE,
+    NOTE + "\n---\n" + REEL,
+    "",
+    "   ",
+    "x" * 6000,
+    123,
+    None,
+    [NOTE],
+    {"text": NOTE},
+], ids=repr)
+def test_a_chosen_note_that_is_not_one_recipe_written_out_refuses_the_whole_request(client, reading, bad):
+    response = import_notes(client, [NOTE, bad], links=[REEL])
+    assert response.status_code == 400
+    assert response.get_json() == {"error": NOT_ONE_NOTE}
+    assert all_recipes(client) == [] and reading == []
+
+
+@pytest.mark.parametrize("notes", [NOTE, {"0": NOTE}, 5, True])
+def test_chosen_notes_that_are_not_a_list_are_refused(client, reading, notes):
+    response = import_notes(client, notes)
+    assert response.status_code == 400
+    assert response.get_json() == {"error": NOT_ONE_NOTE}
+    assert all_recipes(client) == []
+
+
+def test_chosen_links_that_are_not_a_list_are_still_refused_when_notes_are_chosen(client, reading):
+    response = send_json(client, {"links": REEL, "notes": [NOTE]})
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Choose at least one recipe to import"}
+    assert all_recipes(client) == []
+
+
+def test_a_bad_link_refuses_the_notes_chosen_with_it(client, reading):
+    response = send_json(client, {"links": [PROFILE], "notes": [NOTE]})
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "One of the chosen links is not a TikTok or Instagram post, reel or video"}
+    assert all_recipes(client) == [] and reading == []
+
+
+def test_the_recipes_page_data_of_a_note_recipe_has_no_link_to_show(client, reading):
+    import_notes(client, [NOTE])
+    (listed,) = client.get("/api/recipes").get_json()
+    recipe = client.get(f"/api/recipes/{listed['id']}").get_json()
+    assert (recipe["source_url"], recipe["platform"]) == ("", "notes")
+
+
+def test_a_caption_is_read_as_a_caption_whichever_way_it_arrives(client, monkeypatch):
+    kinds = []
+
+    def read(text, kind):
+        kinds.append(kind)
+        return {"title": "Garlic bread", "ingredients": ["butter"], "directions": ["Bake"]}
+
+    monkeypatch.setattr(app_module, "extract_recipe", read)
+    monkeypatch.setattr(app_module, "fetch_tiktok_data", lambda url: {"caption": "Garlic bread", "thumbnail_url": None})
+
+    import_chosen(client, [TIKTOK])
+    client.post("/api/recipes", json={"url": REEL, "caption": "Garlic bread: butter, garlic"})
+    waiting = client.post("/api/recipes", json={"url": POST}).get_json()
+    client.patch(f"/api/recipes/{waiting['id']}/caption", json={"caption": "Garlic bread: butter, garlic"})
+
+    assert kinds == ["caption", "caption", "caption"]

@@ -23,6 +23,7 @@ from limits import client_ip, max_bulk_links, too_many_auth_attempts, too_many_r
 from auth import create_user, authenticate_user, get_user_by_id, EmailAlreadyExists, InvalidCredentials
 from url_utils import detect_platform, extract_urls_from_text, find_recipe_link, is_post_link, link_key
 from import_parser import MAX_UPLOAD_BYTES, ImportFileError, read_export
+from notes_parser import item_key, read_notes
 from tiktok_oembed import fetch_tiktok_data, TikTokFetchError
 from recipe_extractor import extract_recipe, NoRecipeFoundError, ExtractionError
 from recipe_storage import (
@@ -112,7 +113,7 @@ def robots():
     return "User-agent: *\nDisallow: /\n", 200, {"Content-Type": "text/plain"}
 
 
-def _run_extraction(conn, recipe_id: int, caption: str) -> dict:
+def _run_extraction(conn, recipe_id: int, caption: str, kind: str = "caption") -> dict:
     if not use_ai_call(conn):
         recipe = mark_recipe_needs_manual(conn, recipe_id)
         recipe["extraction_message"] = (
@@ -121,7 +122,7 @@ def _run_extraction(conn, recipe_id: int, caption: str) -> dict:
         )
         return recipe
     try:
-        result = extract_recipe(caption)
+        result = extract_recipe(caption, kind)
         return update_recipe_extracted(conn, recipe_id, result["title"], result["ingredients"], result["directions"])
     except NoRecipeFoundError as e:
         recipe = mark_recipe_needs_manual(conn, recipe_id)
@@ -411,20 +412,59 @@ def _links_in_uploaded_file() -> list:
         raise BadImportRequest(str(e), 422)
 
 
-def _links_chosen_on_the_preview(data) -> list:
+NOTHING_CHOSEN = "Choose at least one recipe to import"
+
+
+def _links_chosen_on_the_preview(chosen) -> list:
     """
     The links ticked on the preview. They are checked again here, since a request can come from
     anywhere: each one has to be exactly one TikTok or Instagram post link and nothing else.
     """
-    chosen = data.get("links") if isinstance(data, dict) else None
-    if not isinstance(chosen, list) or not chosen:
-        raise BadImportRequest("Choose at least one recipe to import", 400)
+    if chosen is None:
+        return []
+    if not isinstance(chosen, list):
+        raise BadImportRequest(NOTHING_CHOSEN, 400)
     links = {}
     for url in chosen:
         if not isinstance(url, str) or extract_urls_from_text(url) != [url] or not is_post_link(url):
             raise BadImportRequest("One of the chosen links is not a TikTok or Instagram post, reel or video", 400)
         links[url] = None
     return [{"url": url, "platform": detect_platform(url)} for url in links]
+
+
+def _notes_chosen_on_the_preview(chosen) -> list:
+    """
+    The notes ticked on the preview, each one the text the preview listed. They are read again
+    here, for the same reason: each one has to be exactly one recipe written out and nothing else.
+    """
+    if chosen is None:
+        return []
+    not_a_note = BadImportRequest("One of the chosen notes is not a single recipe written out", 400)
+    if not isinstance(chosen, list):
+        raise not_a_note
+    notes = {}
+    for text in chosen:
+        found = []
+        if isinstance(text, str):
+            try:
+                found, _ = read_notes(text)
+            except ImportFileError:
+                pass
+        if len(found) != 1 or found[0].get("kind") != "note":
+            raise not_a_note
+        notes.setdefault(item_key(found[0]), found[0])
+    return list(notes.values())
+
+
+def _chosen_on_the_preview(data) -> tuple:
+    """The links and the notes ticked on the preview, as (links, notes)."""
+    if not isinstance(data, dict):
+        raise BadImportRequest(NOTHING_CHOSEN, 400)
+    links = _links_chosen_on_the_preview(data.get("links"))
+    notes = _notes_chosen_on_the_preview(data.get("notes"))
+    if not links and not notes:
+        raise BadImportRequest(NOTHING_CHOSEN, 400)
+    return links, notes
 
 
 @app.route("/api/recipes/import-preview", methods=["POST"])
@@ -445,22 +485,44 @@ def import_preview():
     return jsonify({"limit": max_bulk_links(), "links": links})
 
 
+@app.route("/api/recipes/notes-preview", methods=["POST"])
+@login_required
+def notes_preview():
+    """What some pasted notes would import, without saving anything."""
+    data = request.get_json(silent=True)
+    text = data.get("text") if isinstance(data, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return jsonify({"error": "Paste your notes first"}), 400
+    try:
+        items, left_out = read_notes(text)
+    except ImportFileError as e:
+        return jsonify({"error": str(e)}), 422
+    conn = get_connection()
+    try:
+        saved = saved_links(conn, user_id=_user_id())
+    finally:
+        conn.close()
+    for item in items:
+        item["already_saved"] = item_key(item) in saved
+    return jsonify({"limit": max_bulk_links(), "links": items, "skipped": left_out})
+
+
 @app.route("/api/recipes/bulk-import", methods=["POST"])
 @login_required
 def bulk_import():
-    """Saves the links ticked on the preview (JSON), or every link in an uploaded file."""
+    """Saves the links and notes ticked on the preview (JSON), or every link in an uploaded file."""
     try:
         if request.is_json:
-            links = _links_chosen_on_the_preview(request.get_json(silent=True))
+            links, notes = _chosen_on_the_preview(request.get_json(silent=True))
         else:
-            links = _links_in_uploaded_file()
+            links, notes = _links_in_uploaded_file(), []
     except BadImportRequest as e:
         return jsonify({"error": str(e)}), e.status
-    if max_bulk_links() and len(links) > max_bulk_links():
-        return jsonify({"error": f"Too many links in one import (the limit is {max_bulk_links()})"}), 400
+    if max_bulk_links() and len(links) + len(notes) > max_bulk_links():
+        return jsonify({"error": f"Too many recipes in one import (the limit is {max_bulk_links()})"}), 400
 
     conn = get_connection()
-    summary = {"total_found": len(links), "already_saved": 0, "extracted": 0, "needs_caption": 0, "needs_manual": 0, "recipe_ids": []}
+    summary = {"total_found": len(links) + len(notes), "already_saved": 0, "extracted": 0, "needs_caption": 0, "needs_manual": 0, "recipe_ids": []}
     try:
         saved = saved_links(conn, user_id=_user_id())
         for link in links:
@@ -492,6 +554,20 @@ def bulk_import():
                     summary["needs_manual"] += 1
             else:
                 summary["needs_caption"] += 1
+
+        for note in notes:
+            key = item_key(note)
+            if key in saved:
+                summary["already_saved"] += 1
+                continue
+            recipe = add_recipe(conn, note["url"], note["platform"], caption_raw=note["text"],
+                                title=note["title"], user_id=_user_id())
+            summary["recipe_ids"].append(recipe["id"])
+            result = _run_extraction(conn, recipe["id"], note["text"], "note")
+            if result["status"] == "extracted":
+                summary["extracted"] += 1
+            else:
+                summary["needs_manual"] += 1
 
         return jsonify(summary)
     finally:

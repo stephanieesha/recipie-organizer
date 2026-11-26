@@ -79,7 +79,9 @@
       }
 
       html += `<h2 class="recipe-title">${esc(r.title || 'Untitled recipe')}</h2>`;
-      html += `<a href="${esc(r.source_url)}" target="_blank" class="source-link">View original on ${esc(r.platform)}</a>`;
+      if (r.source_url) {
+        html += `<a href="${esc(r.source_url)}" target="_blank" class="source-link">View original on ${esc(r.platform)}</a>`;
+      }
 
       html += '<div class="section-label">Ingredients</div>';
       html += r.ingredients.length
@@ -92,7 +94,7 @@
         : '<p style="color:#7C5A67;font-size:13px;">None yet.</p>';
 
       if (r.caption_raw) {
-        html += `<div class="section-label">Original caption</div><p style="font-size:12px;color:#7C5A67;white-space:pre-wrap;">${esc(r.caption_raw)}</p>`;
+        html += `<div class="section-label">${r.platform === 'notes' ? 'Original note' : 'Original caption'}</div><p style="font-size:12px;color:#7C5A67;white-space:pre-wrap;">${esc(r.caption_raw)}</p>`;
       }
 
       html += `<div style="margin-top:20px;"><button onclick="enterEditMode()">Edit</button></div>`;
