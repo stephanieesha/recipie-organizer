@@ -19,6 +19,15 @@
     button:hover { background: #8A1A44; }
     button.danger { background: #A8344F; padding: 5px 10px; font-size: 12px; }
     button.small { padding: 4px 10px; font-size: 11px; }
+    button.secondary { background: #fff; color: #68012D; border: 1px solid #EBC9D6; }
+    button.secondary:hover { background: #F6DCE5; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .import-preview { display: none; margin: 6px 0 10px; }
+    .import-tools { display: flex; gap: 8px; }
+    .import-list { max-height: 260px; overflow-y: auto; background: #fff; border: 1px solid #EBC9D6; border-radius: 6px; padding: 2px 10px; margin: 8px 0; }
+    .import-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #F6DCE5; font-size: 12px; cursor: pointer; }
+    .import-item input { flex: none; min-width: 0; width: 15px; height: 15px; padding: 0; margin: 0; }
+    .import-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .error-box { background: #F4DEDC; border: 1px solid #DDB3AE; color: #7A2E24; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
     .success-box { background: #DEE9DC; border: 1px solid #B3C9AE; color: #2E4A2E; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
     .info-box { background: #F6DCE5; border: 1px solid #EBC9D6; color: #68012D; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
@@ -65,9 +74,22 @@
       <div class="bulk-section" id="bulkSection">
         <div id="bulkMessage"></div>
         <div class="form-row">
-          <input type="file" id="bulkFileInput" accept=".json,.txt,.html" />
-          <button onclick="bulkImport()">Import</button>
+          <input type="file" id="bulkFileInput" accept=".json,.txt,.html" onchange="cancelPreview()" />
+          <button id="previewButton" onclick="previewImport()">Preview</button>
         </div>
+        <div class="import-preview" id="importPreview">
+          <div id="importSummary"></div>
+          <div class="import-tools">
+            <button class="small secondary" id="selectAllButton" onclick="selectImport('all')">Select all</button>
+            <button class="small secondary" onclick="selectImport('none')">Select none</button>
+          </div>
+          <div class="import-list" id="importList"></div>
+          <div class="form-row">
+            <button id="importButton" onclick="importSelected()">Import</button>
+            <button class="secondary" onclick="cancelPreview()">Cancel</button>
+          </div>
+        </div>
+        <p style="font-size:11px; color:#7C5A67;">Choose a file and press Preview to see what is in it. Nothing is saved until you press Import.</p>
         <p style="font-size:11px; color:#7C5A67;">Instagram: in the app, open Settings, then Accounts Center, Your information and permissions, Download your information. Choose JSON as the format, then upload the saved_posts.json file from the download. Instagram posts are added without a caption, so you paste each caption in afterward.</p>
         <p style="font-size:11px; color:#7C5A67;">TikTok: in the app, open Profile, then the menu, Settings and privacy, Account, Download your data. Choose JSON as the file format, wait for TikTok to prepare it (this can take a few days), then upload the user_data.json file from the download. Only your favorites, the videos you saved with the bookmark button, are imported, not your likes or watch history. TikTok videos are filled in automatically.</p>
         <p style="font-size:11px; color:#7C5A67;">A text file with one link per line works too.</p>
@@ -242,33 +264,137 @@
       section.style.display = section.style.display === 'block' ? 'none' : 'block';
     }
 
-    async function bulkImport() {
+    // The import: a file is read first, what it holds is listed with a tick box for each recipe,
+    // and only the ticked ones are saved.
+    let importLinks = [];
+    let importChosen = new Set();
+    let importLimit = 0;
+    let importBusy = false;
+
+    function setImportBusy(busy) {
+      importBusy = busy;
+      document.getElementById('previewButton').disabled = busy;
+      updateImportControls();
+    }
+
+    function renderImportPreview() {
+      document.getElementById('importPreview').style.display = importLinks.length > 0 ? 'block' : 'none';
+      document.getElementById('importList').innerHTML = importLinks.map((link, i) => `
+        <label class="import-item">
+          <input type="checkbox" ${importChosen.has(i) ? 'checked' : ''} onchange="toggleImport(${i})">
+          <span class="status-tag status-pending">${esc(link.platform)}</span>
+          <span class="import-url" title="${esc(link.url)}">${esc(link.url)}</span>
+        </label>
+      `).join('');
+      updateImportControls();
+    }
+
+    // How many recipes can be ticked at once: all of them, or the most one import allows.
+    function importCap() {
+      return importLimit > 0 ? Math.min(importLimit, importLinks.length) : importLinks.length;
+    }
+
+    function updateImportControls() {
+      const count = importChosen.size;
+      const tooMany = importLimit > 0 && count > importLimit;
+      const found = importLinks.length;
+      const capped = importCap() < found;
+      let summary = `Found ${found} ${found === 1 ? 'recipe' : 'recipes'}.`;
+      if (capped) {
+        summary += ` You can import ${importLimit} at a time, so the first ${importLimit} are ticked. Untick some and tick others to choose different ones.`;
+      }
+      document.getElementById('selectAllButton').textContent = capped ? `Select first ${importCap()}` : 'Select all';
+      let html = `<div class="info-box">${esc(summary)}</div>`;
+      if (tooMany) {
+        html += `<div class="error-box">${esc(`You can import ${importLimit} at a time. Untick ${count - importLimit} to continue.`)}</div>`;
+      }
+      document.getElementById('importSummary').innerHTML = found > 0 ? html : '';
+      const button = document.getElementById('importButton');
+      button.textContent = count === 1 ? 'Import 1 recipe' : `Import ${count} recipes`;
+      button.disabled = importBusy || count === 0 || tooMany;
+    }
+
+    function toggleImport(index) {
+      if (importChosen.has(index)) {
+        importChosen.delete(index);
+      } else {
+        importChosen.add(index);
+      }
+      updateImportControls();
+    }
+
+    function selectImport(which) {
+      importChosen = new Set(which === 'all' ? importLinks.slice(0, importCap()).map((link, i) => i) : []);
+      renderImportPreview();
+    }
+
+    function cancelPreview() {
+      importLinks = [];
+      importChosen = new Set();
+      renderImportPreview();
+    }
+
+    async function previewImport() {
+      if (importBusy) return;
       const messageBox = document.getElementById('bulkMessage');
       const fileInput = document.getElementById('bulkFileInput');
       messageBox.innerHTML = '';
+      cancelPreview();
 
       if (!fileInput.files.length) {
         messageBox.innerHTML = '<div class="error-box">Choose a file first.</div>';
         return;
       }
 
-      messageBox.innerHTML = '<p style="color:#7C5A67;font-size:13px;">Importing - this can take a while for a large backlog, since each TikTok link needs a live lookup...</p>';
+      messageBox.innerHTML = '<p style="color:#7C5A67;font-size:13px;">Reading the file...</p>';
+      setImportBusy(true);
 
       const formData = new FormData();
       formData.append('file', fileInput.files[0]);
 
-      const { ok, data } = await sendRequest('/api/recipes/bulk-import', { method: 'POST', body: formData });
+      const { ok, data } = await sendRequest('/api/recipes/import-preview', { method: 'POST', body: formData });
+      setImportBusy(false);
 
       if (!ok) {
         messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
         return;
       }
 
-      messageBox.innerHTML = `<div class="success-box">Found ${data.total_found} links - taking you to review and categorize them...</div>`;
-      fileInput.value = '';
-      if (data.recipe_ids && data.recipe_ids.length > 0) {
-        window.location.href = `/bulk-review?ids=${data.recipe_ids.join(',')}`;
+      messageBox.innerHTML = '';
+      importLinks = data.links;
+      importLimit = data.limit;
+      selectImport('all');
+    }
+
+    async function importSelected() {
+      const tooMany = importLimit > 0 && importChosen.size > importLimit;
+      if (importBusy || importChosen.size === 0 || tooMany) return;
+      const messageBox = document.getElementById('bulkMessage');
+      const urls = importLinks.filter((link, i) => importChosen.has(i)).map((link) => link.url);
+
+      messageBox.innerHTML = '<p style="color:#7C5A67;font-size:13px;">Importing - this can take a while, since each TikTok video needs a live lookup...</p>';
+      setImportBusy(true);
+
+      const { ok, data } = await sendRequest('/api/recipes/bulk-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ links: urls }),
+      });
+      setImportBusy(false);
+
+      if (!ok) {
+        messageBox.innerHTML = `<div class="error-box">${esc(data.error)}</div>`;
+        return;
+      }
+
+      const saved = data.recipe_ids || [];
+      document.getElementById('bulkFileInput').value = '';
+      cancelPreview();
+      if (saved.length > 0) {
+        messageBox.innerHTML = `<div class="success-box">Saved ${saved.length} ${saved.length === 1 ? 'recipe' : 'recipes'} - taking you to review and categorize them...</div>`;
+        window.location.href = `/bulk-review?ids=${saved.join(',')}`;
       } else {
+        messageBox.innerHTML = '<div class="info-box">Nothing new was saved.</div>';
         loadRecipes();
       }
     }

@@ -251,3 +251,212 @@ def test_a_tiktok_link_that_is_not_a_video_is_not_saved(client):
     summary = upload(client, f"https://www.tiktok.com/@chef\n{FAVORITES[0]}\nhttps://www.tiktok.com/tag/jollof\n", "links.txt").get_json()
     assert summary["total_found"] == 1
     assert saved_urls(client) == [FAVORITES[0]]
+
+
+# ---------- the preview, and importing what was ticked on it ----------
+
+def preview(client, content, name="saved_posts.json"):
+    data = content.encode() if isinstance(content, str) else content
+    return client.post(
+        "/api/recipes/import-preview",
+        data={"file": (io.BytesIO(data), name)},
+        content_type="multipart/form-data",
+    )
+
+
+def import_chosen(client, links):
+    return client.post("/api/recipes/bulk-import", json={"links": links})
+
+
+def send_json(client, body):
+    return client.post("/api/recipes/bulk-import", data=json.dumps(body), content_type="application/json")
+
+
+def test_the_preview_lists_the_recipes_in_a_file_and_saves_nothing(client):
+    response = preview(client, saved_posts_json(REEL, PROFILE, POST, REEL))
+    assert response.status_code == 200
+    assert response.get_json()["links"] == [
+        {"url": REEL, "platform": "instagram"},
+        {"url": POST, "platform": "instagram"},
+    ]
+    assert saved_urls(client) == []
+
+
+def test_the_preview_of_a_tiktok_file_lists_only_the_favorites_and_looks_nothing_up(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app_module, "fetch_tiktok_data", lambda url: calls.append(url))
+    monkeypatch.setattr(app_module, "extract_recipe", lambda caption: calls.append(caption))
+
+    response = preview(client, tiktok_data(FAVORITES, LIKES, HISTORY), "user_data.json")
+
+    assert response.status_code == 200
+    assert [link["url"] for link in response.get_json()["links"]] == FAVORITES
+    assert {link["platform"] for link in response.get_json()["links"]} == {"tiktok"}
+    assert calls == []
+    assert saved_urls(client) == []
+
+
+def test_the_preview_says_how_many_can_be_imported_at_once_and_still_lists_them_all(client, monkeypatch):
+    monkeypatch.setenv("MAX_BULK_LINKS", "2")
+    body = preview(client, saved_posts_json(REEL, POST, TV)).get_json()
+    assert body["limit"] == 2
+    assert [link["url"] for link in body["links"]] == [REEL, POST, TV]
+
+
+def test_the_preview_has_a_limit_of_zero_when_no_limit_is_set(client):
+    assert preview(client, saved_posts_json(REEL)).get_json()["limit"] == 0
+
+
+@pytest.mark.parametrize("content,name,error", [
+    ('{"name": "chef"}', "saved_posts.json", NO_LINKS),
+    (saved_posts_json(PROFILE), "saved_posts.json", NO_POSTS),
+    ("", "saved_posts.json", "This file is empty."),
+    (tiktok_data([], LIKES, HISTORY), "user_data.json", NO_FAVORITES),
+    ("Video Browsing History\nLink: " + HISTORY[0] + "\n", "user_data.txt", TIKTOK_TEXT_FILE),
+])
+def test_a_file_with_nothing_to_import_is_explained_by_the_preview(client, content, name, error):
+    response = preview(client, content, name)
+    assert response.status_code == 422
+    assert response.get_json() == {"error": error}
+
+
+def test_the_preview_needs_a_file(client):
+    missing = client.post("/api/recipes/import-preview", data={}, content_type="multipart/form-data")
+    blank = client.post("/api/recipes/import-preview", data={"file": (io.BytesIO(b"x"), "")}, content_type="multipart/form-data")
+    assert (missing.status_code, missing.get_json()) == (400, {"error": "No file uploaded"})
+    assert (blank.status_code, blank.get_json()) == (400, {"error": "No file selected"})
+
+
+def test_a_file_over_the_size_limit_is_refused_by_the_preview_too(client, monkeypatch):
+    monkeypatch.setitem(app_module.app.config, "MAX_CONTENT_LENGTH", 2000)
+    response = preview(client, saved_posts_json(REEL) + " " * 5000)
+    assert response.status_code == 413
+    assert "50 MB" in response.get_json()["error"]
+
+
+def test_only_the_links_that_were_ticked_are_saved_in_the_order_given(client):
+    response = import_chosen(client, [TV, REEL])
+    summary = response.get_json()
+    assert response.status_code == 200
+    assert summary["total_found"] == 2
+    assert summary["needs_caption"] == 2
+    assert summary["recipe_ids"] == sorted(summary["recipe_ids"]) and len(summary["recipe_ids"]) == 2
+    assert saved_urls(client) == [TV, REEL]
+
+
+def test_a_link_chosen_twice_is_saved_once(client):
+    summary = import_chosen(client, [REEL, POST, REEL]).get_json()
+    assert summary["total_found"] == 2
+    assert saved_urls(client) == [REEL, POST]
+
+
+def test_chosen_tiktok_videos_are_looked_up_and_filled_in(client, monkeypatch):
+    looked_up = []
+
+    def fake_lookup(url):
+        looked_up.append(url)
+        return {"caption": "Garlic bread: butter, garlic, bread", "thumbnail_url": "https://example.com/cover.jpg"}
+
+    monkeypatch.setattr(app_module, "fetch_tiktok_data", fake_lookup)
+    monkeypatch.setattr(app_module, "extract_recipe", lambda caption: {"title": "Garlic bread", "ingredients": ["butter"], "directions": ["Bake"]})
+
+    summary = import_chosen(client, FAVORITES[:2]).get_json()
+
+    assert summary["extracted"] == 2
+    assert looked_up == FAVORITES[:2]
+    assert {r["title"] for r in client.get("/api/recipes").get_json()} == {"Garlic bread"}
+
+
+def test_a_tiktok_video_that_cannot_be_looked_up_is_still_saved_for_manual_entry(client):
+    summary = import_chosen(client, [FAVORITES[0], REEL]).get_json()
+    assert summary["needs_manual"] == 1
+    assert summary["needs_caption"] == 1
+    assert saved_urls(client) == [FAVORITES[0], REEL]
+
+
+def test_the_chosen_recipes_belong_to_the_person_who_imported_them(client):
+    import_chosen(client, [REEL])
+    other = app_module.app.test_client()
+    other.post("/signup", data={"email": "other@example.com", "password": "correct-horse"})
+    assert other.get("/api/recipes").get_json() == []
+    assert saved_urls(client) == [REEL]
+
+
+def test_more_chosen_links_than_the_limit_are_refused_and_nothing_is_saved(client, monkeypatch):
+    monkeypatch.setenv("MAX_BULK_LINKS", "2")
+    response = import_chosen(client, [REEL, POST, TV])
+    assert response.status_code == 400
+    assert "the limit is 2" in response.get_json()["error"]
+    assert saved_urls(client) == []
+
+
+def test_exactly_the_limit_of_chosen_links_is_accepted(client, monkeypatch):
+    monkeypatch.setenv("MAX_BULK_LINKS", "3")
+    assert import_chosen(client, [REEL, POST, TV]).status_code == 200
+    assert saved_urls(client) == [REEL, POST, TV]
+
+
+def test_the_limit_counts_a_link_chosen_twice_once(client, monkeypatch):
+    monkeypatch.setenv("MAX_BULK_LINKS", "2")
+    assert import_chosen(client, [REEL, REEL, POST]).status_code == 200
+    assert saved_urls(client) == [REEL, POST]
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"links": []}, {"links": None}, {"links": REEL}, {"links": {"url": REEL}}, {"other": [REEL]},
+    [REEL], None, "text", 5,
+])
+def test_a_request_that_chooses_no_recipes_is_refused(client, body):
+    response = send_json(client, body)
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Choose at least one recipe to import"}
+    assert saved_urls(client) == []
+
+
+def test_a_request_that_is_not_valid_json_is_refused(client):
+    response = client.post("/api/recipes/bulk-import", data="{oops", content_type="application/json")
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Choose at least one recipe to import"}
+
+
+@pytest.mark.parametrize("bad", [
+    PROFILE,
+    "https://www.tiktok.com/@chef",
+    "https://example.com/reel/abc123/",
+    "https://www.instagram.com.evil.example/reel/abc123/",
+    "javascript:alert(1)",
+    "not a link",
+    "",
+    REEL + " and some more text",
+    REEL + " " + POST,
+    " " + REEL,
+    REEL + "\n",
+    REEL + ",",
+    "www.instagram.com/reel/abc123/",
+    123,
+    None,
+    [REEL],
+    {"url": REEL},
+], ids=repr)
+def test_a_chosen_link_that_is_not_exactly_one_post_link_refuses_the_whole_request(client, bad):
+    response = import_chosen(client, [REEL, bad])
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "One of the chosen links is not a TikTok or Instagram post, reel or video"}
+    assert saved_urls(client) == []
+
+
+ROUND_TRIP_FILES = [
+    pytest.param(saved_posts_json(REEL, POST, TV), "saved_posts.json", id="instagram json"),
+    pytest.param(f'<a href="{REEL}?igsh=abc&amp;utm=1">x</a><a href="{POST}">y</a>', "saved_posts.html", id="html with entities"),
+    pytest.param(json.dumps({"saved": [REEL, POST]}).replace("/", "\\/"), "saved_posts.json", id="json with escaped slashes"),
+    pytest.param("www.instagram.com/reel/ABC123/,\n" + TIKTOK + ".\n(" + POST + ")\n", "links.txt", id="bare and punctuated links"),
+    pytest.param(tiktok_data(FAVORITES, LIKES, HISTORY), "user_data.json", id="tiktok favorites"),
+]
+
+
+@pytest.mark.parametrize("content,name", ROUND_TRIP_FILES)
+def test_every_link_the_preview_lists_can_be_imported(client, content, name):
+    listed = [link["url"] for link in preview(client, content, name).get_json()["links"]]
+    assert listed
+    assert import_chosen(client, listed).status_code == 200
+    assert saved_urls(client) == listed

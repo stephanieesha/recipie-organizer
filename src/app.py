@@ -21,7 +21,7 @@ from flask_login import LoginManager, UserMixin, current_user, login_required, l
 from db import get_connection, init_db
 from limits import client_ip, max_bulk_links, too_many_auth_attempts, too_many_requests, use_ai_call, use_signup
 from auth import create_user, authenticate_user, get_user_by_id, EmailAlreadyExists, InvalidCredentials
-from url_utils import detect_platform, find_recipe_link
+from url_utils import detect_platform, extract_urls_from_text, find_recipe_link, is_post_link
 from import_parser import MAX_UPLOAD_BYTES, ImportFileError, read_export
 from tiktok_oembed import fetch_tiktok_data, TikTokFetchError
 from recipe_extractor import extract_recipe, NoRecipeFoundError, ExtractionError
@@ -389,19 +389,62 @@ def remove_recipe(recipe_id):
         conn.close()
 
 
+class BadImportRequest(Exception):
+    def __init__(self, message: str, status: int):
+        super().__init__(message)
+        self.status = status
+
+
+def _links_in_uploaded_file() -> list:
+    if "file" not in request.files:
+        raise BadImportRequest("No file uploaded", 400)
+    uploaded = request.files["file"]
+    if not uploaded.filename:
+        raise BadImportRequest("No file selected", 400)
+    try:
+        return read_export(uploaded.read().decode("utf-8", errors="ignore"))
+    except ImportFileError as e:
+        raise BadImportRequest(str(e), 422)
+
+
+def _links_chosen_on_the_preview(data) -> list:
+    """
+    The links ticked on the preview. They are checked again here, since a request can come from
+    anywhere: each one has to be exactly one TikTok or Instagram post link and nothing else.
+    """
+    chosen = data.get("links") if isinstance(data, dict) else None
+    if not isinstance(chosen, list) or not chosen:
+        raise BadImportRequest("Choose at least one recipe to import", 400)
+    links = {}
+    for url in chosen:
+        if not isinstance(url, str) or extract_urls_from_text(url) != [url] or not is_post_link(url):
+            raise BadImportRequest("One of the chosen links is not a TikTok or Instagram post, reel or video", 400)
+        links[url] = None
+    return [{"url": url, "platform": detect_platform(url)} for url in links]
+
+
+@app.route("/api/recipes/import-preview", methods=["POST"])
+@login_required
+def import_preview():
+    """What a file would import, without saving anything or contacting TikTok."""
+    try:
+        links = _links_in_uploaded_file()
+    except BadImportRequest as e:
+        return jsonify({"error": str(e)}), e.status
+    return jsonify({"limit": max_bulk_links(), "links": links})
+
+
 @app.route("/api/recipes/bulk-import", methods=["POST"])
 @login_required
 def bulk_import():
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-    uploaded = request.files["file"]
-    if not uploaded.filename:
-        return jsonify({"error": "No file selected"}), 400
-
+    """Saves the links ticked on the preview (JSON), or every link in an uploaded file."""
     try:
-        links = read_export(uploaded.read().decode("utf-8", errors="ignore"))
-    except ImportFileError as e:
-        return jsonify({"error": str(e)}), 422
+        if request.is_json:
+            links = _links_chosen_on_the_preview(request.get_json(silent=True))
+        else:
+            links = _links_in_uploaded_file()
+    except BadImportRequest as e:
+        return jsonify({"error": str(e)}), e.status
     if max_bulk_links() and len(links) > max_bulk_links():
         return jsonify({"error": f"Too many links in one import (the limit is {max_bulk_links()})"}), 400
 
