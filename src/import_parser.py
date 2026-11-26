@@ -12,7 +12,7 @@ import html
 import json
 import re
 
-from url_utils import detect_platform, extract_urls_from_text, is_post_link
+from url_utils import detect_platform, extract_urls_from_text, link_key
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
@@ -47,8 +47,8 @@ class ImportFileError(ValueError):
 
 def read_export(text: str) -> list:
     """
-    The recipe links in an uploaded file, in the order they appear, each one once, as
-    [{"url": ..., "platform": "instagram" or "tiktok"}].
+    The recipe links in an uploaded file, in the order they appear, each post once (the first way its
+    link is written), as [{"url": ..., "platform": "instagram" or "tiktok"}].
     Raises ImportFileError, with a message for the person, when the file has nothing to import.
 
     Anything but a TikTok data file is searched as plain text, so JSON, HTML and a list of links all
@@ -62,10 +62,14 @@ def read_export(text: str) -> list:
     if found is None:
         found = extract_urls_from_text(html.unescape(text.replace("\\/", "/")))
 
-    posts = [url for url in dict.fromkeys(found) if is_post_link(url)]
+    posts = {}
+    for url in found:
+        key = link_key(url)
+        if key:
+            posts.setdefault(key, url)
     if not posts:
         raise ImportFileError(NO_POSTS if found else NO_LINKS)
-    return [{"url": url, "platform": detect_platform(url)} for url in posts]
+    return [{"url": url, "platform": detect_platform(url)} for url in posts.values()]
 
 
 def _favorite_videos(text: str):

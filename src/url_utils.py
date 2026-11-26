@@ -83,8 +83,9 @@ def extract_urls_from_text(text: str) -> list:
 
 # A link to one post or reel: /p/<code>, /reel/<code>, /reels/<code> or /tv/<code>, with an optional
 # /<username>/ in front, plus the share links the app makes: /share/<code> and /share/reel/<code>.
+# A share link has a code of its own, which is not the code of the post it leads to.
 INSTAGRAM_POST_PATH = re.compile(
-    r"/(?:(?:[\w.]+/)?(?:p|reels?|tv)|share(?:/(?:p|reels?|tv))?)/(?!audio/)[\w-]+",
+    r"/(?:(?P<share>share)(?:/(?:p|reels?|tv))?|(?:[\w.]+/)?(?:p|reels?|tv))/(?!audio/)(?P<code>[\w-]+)",
     re.IGNORECASE,
 )
 
@@ -92,26 +93,48 @@ INSTAGRAM_POST_PATH = re.compile(
 # A TikTok link to one video or photo post: /@user/video/<id>, /@user/photo/<id>, /v/<id>.html,
 # /t/<code>, and /share/video/<id>, which is how TikTok's data download writes its links. The links
 # from the share sheet, vm.tiktok.com/<code> and vt.tiktok.com/<code>, have only a code in the path.
-TIKTOK_POST_PATH = re.compile(r"/(?:@[\w.-]+/(?:video|photo)/\d+|t/[\w-]+|v/\d+|share/video/\d+)", re.IGNORECASE)
+TIKTOK_POST_PATH = re.compile(
+    r"/(?:(?:@[\w.-]+/(?:video|photo)|v|share/video)/(?P<id>\d+)|t/(?P<code>[\w-]+))",
+    re.IGNORECASE,
+)
 TIKTOK_SHORT_LINK_HOSTS = ("vm.tiktok.com", "vt.tiktok.com")
+
+
+def link_key(url: str):
+    """
+    What the link goes to, so that the same post written two ways is known to be one recipe: /p/ or
+    /reel/ in an Instagram link, a link with or without ?igsh=..., the link TikTok's data download
+    writes or the one the app's address bar shows. Two links are the same recipe when their keys
+    are equal. None when the link does not go to one post, or to some other site. The link is
+    judged by its address, not by asking the site, so a short link and the long link it leads to
+    are not known to be the same.
+    """
+    text = url.strip()
+    try:
+        platform = detect_platform(text)
+    except ValueError:
+        return None
+    parts = urlsplit(text)
+    if platform == "instagram":
+        found = INSTAGRAM_POST_PATH.match(parts.path)
+        if not found:
+            return None
+        return f"instagram:{'share:' if found['share'] else ''}{found['code']}"
+    if parts.hostname in TIKTOK_SHORT_LINK_HOSTS:
+        found = re.match(r"/([\w-]+)", parts.path)
+        return f"tiktok:{parts.hostname}/{found[1]}" if found else None
+    found = TIKTOK_POST_PATH.match(parts.path)
+    if not found:
+        return None
+    return f"tiktok:{found['id']}" if found["id"] else f"tiktok:t/{found['code']}"
 
 
 def is_post_link(url: str) -> bool:
     """
     True when the link goes to one post, reel or video, and not to a profile, a hashtag, a sound, a
-    place or a story, or to some other site. The link is judged by its address, not by asking the
-    site.
+    place or a story, or to some other site.
     """
-    try:
-        platform = detect_platform(url)
-    except ValueError:
-        return False
-    parts = urlsplit(url)
-    if platform == "instagram":
-        return bool(INSTAGRAM_POST_PATH.match(parts.path))
-    if parts.hostname in TIKTOK_SHORT_LINK_HOSTS:
-        return bool(re.match(r"/[\w-]+", parts.path))
-    return bool(TIKTOK_POST_PATH.match(parts.path))
+    return link_key(url) is not None
 
 
 def tiktok_web_link(url: str):

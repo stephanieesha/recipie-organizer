@@ -21,13 +21,13 @@ from flask_login import LoginManager, UserMixin, current_user, login_required, l
 from db import get_connection, init_db
 from limits import client_ip, max_bulk_links, too_many_auth_attempts, too_many_requests, use_ai_call, use_signup
 from auth import create_user, authenticate_user, get_user_by_id, EmailAlreadyExists, InvalidCredentials
-from url_utils import detect_platform, extract_urls_from_text, find_recipe_link, is_post_link
+from url_utils import detect_platform, extract_urls_from_text, find_recipe_link, is_post_link, link_key
 from import_parser import MAX_UPLOAD_BYTES, ImportFileError, read_export
 from tiktok_oembed import fetch_tiktok_data, TikTokFetchError
 from recipe_extractor import extract_recipe, NoRecipeFoundError, ExtractionError
 from recipe_storage import (
     add_recipe, update_recipe_extracted, mark_recipe_needs_manual, update_recipe_manual,
-    get_recipes, get_recipe, delete_recipe, get_recipes_by_category, set_recipe_category, RecipeNotFound,
+    get_recipes, get_recipe, delete_recipe, get_recipes_by_category, set_recipe_category, saved_links, RecipeNotFound,
 )
 from category_storage import (
     add_category, get_categories, get_category, delete_category,
@@ -282,6 +282,10 @@ def create_recipe():
             except CategoryNotFound:
                 return jsonify({"error": "Category not found"}), 404
 
+        existing = saved_links(conn, user_id=_user_id()).get(link_key(url))
+        if existing is not None:
+            return jsonify({"error": "You already saved this recipe.", "existing_recipe_id": existing}), 409
+
         if platform == "tiktok":
             recipe = add_recipe(conn, url, platform, category_id=category_id, user_id=_user_id())
             try:
@@ -431,6 +435,13 @@ def import_preview():
         links = _links_in_uploaded_file()
     except BadImportRequest as e:
         return jsonify({"error": str(e)}), e.status
+    conn = get_connection()
+    try:
+        saved = saved_links(conn, user_id=_user_id())
+    finally:
+        conn.close()
+    for link in links:
+        link["already_saved"] = link_key(link["url"]) in saved
     return jsonify({"limit": max_bulk_links(), "links": links})
 
 
@@ -449,11 +460,16 @@ def bulk_import():
         return jsonify({"error": f"Too many links in one import (the limit is {max_bulk_links()})"}), 400
 
     conn = get_connection()
-    summary = {"total_found": len(links), "extracted": 0, "needs_caption": 0, "needs_manual": 0, "recipe_ids": []}
+    summary = {"total_found": len(links), "already_saved": 0, "extracted": 0, "needs_caption": 0, "needs_manual": 0, "recipe_ids": []}
     try:
+        saved = saved_links(conn, user_id=_user_id())
         for link in links:
             url, platform = link["url"], link["platform"]
+            if link_key(url) in saved:
+                summary["already_saved"] += 1
+                continue
             recipe = add_recipe(conn, url, platform, user_id=_user_id())
+            saved[link_key(url)] = recipe["id"]
             summary["recipe_ids"].append(recipe["id"])
 
             if platform == "tiktok":

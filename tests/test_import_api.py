@@ -47,6 +47,14 @@ def client(monkeypatch):
         yield test_client
 
 
+@pytest.fixture
+def other_client(client):
+    """A second person with an account of their own."""
+    other = app_module.app.test_client()
+    other.post("/signup", data={"email": "other@example.com", "password": "correct-horse"})
+    return other
+
+
 def saved_posts_json(*hrefs):
     entries = [
         {"title": f"chef_{i}", "string_map_data": {"Saved on": {"href": href, "timestamp": 1700000000 + i}}}
@@ -276,8 +284,8 @@ def test_the_preview_lists_the_recipes_in_a_file_and_saves_nothing(client):
     response = preview(client, saved_posts_json(REEL, PROFILE, POST, REEL))
     assert response.status_code == 200
     assert response.get_json()["links"] == [
-        {"url": REEL, "platform": "instagram"},
-        {"url": POST, "platform": "instagram"},
+        {"url": REEL, "platform": "instagram", "already_saved": False},
+        {"url": POST, "platform": "instagram", "already_saved": False},
     ]
     assert saved_urls(client) == []
 
@@ -374,11 +382,9 @@ def test_a_tiktok_video_that_cannot_be_looked_up_is_still_saved_for_manual_entry
     assert saved_urls(client) == [FAVORITES[0], REEL]
 
 
-def test_the_chosen_recipes_belong_to_the_person_who_imported_them(client):
+def test_the_chosen_recipes_belong_to_the_person_who_imported_them(client, other_client):
     import_chosen(client, [REEL])
-    other = app_module.app.test_client()
-    other.post("/signup", data={"email": "other@example.com", "password": "correct-horse"})
-    assert other.get("/api/recipes").get_json() == []
+    assert other_client.get("/api/recipes").get_json() == []
     assert saved_urls(client) == [REEL]
 
 
@@ -460,3 +466,116 @@ def test_every_link_the_preview_lists_can_be_imported(client, content, name):
     assert listed
     assert import_chosen(client, listed).status_code == 200
     assert saved_urls(client) == listed
+
+
+# ---------- recipes that are already saved ----------
+
+def another_way(link):
+    """The same Instagram post written differently: /p/ instead of /reel/, with tracking added."""
+    return link.replace("/reel/", "/p/").replace("/tv/", "/p/") + "?igsh=MXx4eWx"
+
+
+def test_the_preview_marks_the_posts_already_saved_even_when_the_file_writes_them_another_way(client):
+    import_chosen(client, [REEL])
+    listed = preview(client, saved_posts_json(another_way(REEL), POST, TV)).get_json()["links"]
+    assert [(link["url"], link["already_saved"]) for link in listed] == [
+        (another_way(REEL), True), (POST, False), (TV, False),
+    ]
+    assert saved_urls(client) == [REEL]
+
+
+def test_the_preview_marks_posts_saved_by_pasting_a_link_too(client):
+    client.post("/api/recipes", json={"url": POST})
+    listed = preview(client, saved_posts_json(REEL, POST)).get_json()["links"]
+    assert [link["already_saved"] for link in listed] == [False, True]
+
+
+def test_the_preview_does_not_mark_posts_that_only_someone_else_saved(client, other_client):
+    import_chosen(other_client, [REEL])
+    assert preview(client, saved_posts_json(REEL)).get_json()["links"][0]["already_saved"] is False
+
+
+def test_a_post_that_is_already_saved_is_skipped_and_the_rest_are_saved(client):
+    first = import_chosen(client, [REEL]).get_json()["recipe_ids"]
+    summary = import_chosen(client, [REEL, POST, TV]).get_json()
+    assert summary["total_found"] == 3
+    assert summary["already_saved"] == 1
+    assert summary["needs_caption"] == 2
+    assert len(summary["recipe_ids"]) == 2
+    assert first[0] not in summary["recipe_ids"]
+    assert saved_urls(client) == [REEL, POST, TV]
+
+
+def test_a_post_already_saved_under_another_link_is_skipped(client):
+    import_chosen(client, [REEL])
+    summary = import_chosen(client, [another_way(REEL)]).get_json()
+    assert summary["already_saved"] == 1
+    assert summary["recipe_ids"] == []
+    assert saved_urls(client) == [REEL]
+
+
+def test_a_post_saved_by_pasting_its_link_is_skipped_by_the_import(client):
+    client.post("/api/recipes", json={"url": REEL})
+    summary = import_chosen(client, [REEL, POST]).get_json()
+    assert summary["already_saved"] == 1
+    assert saved_urls(client) == [REEL, POST]
+
+
+def test_the_same_post_written_two_ways_in_one_import_is_saved_once(client):
+    summary = import_chosen(client, [REEL, another_way(REEL)]).get_json()
+    assert summary["already_saved"] == 1
+    assert len(summary["recipe_ids"]) == 1
+    assert saved_urls(client) == [REEL]
+
+
+def test_importing_the_same_file_again_saves_nothing_new(client):
+    content = saved_posts_json(REEL, POST, TV)
+    upload(client, content)
+    again = upload(client, content).get_json()
+    assert again["already_saved"] == 3
+    assert again["recipe_ids"] == []
+    assert again["needs_caption"] == 0
+    assert saved_urls(client) == [REEL, POST, TV]
+
+
+def test_a_tiktok_video_already_saved_is_not_looked_up_again(client, monkeypatch):
+    looked_up = []
+
+    def unreachable(url):
+        looked_up.append(url)
+        raise TikTokFetchError("not reachable in tests")
+
+    monkeypatch.setattr(app_module, "fetch_tiktok_data", unreachable)
+    import_chosen(client, [FAVORITES[0]])
+    looked_up.clear()
+
+    address_bar_link = "https://www.tiktok.com/@chef/video/7100000000000000001"
+    summary = import_chosen(client, [FAVORITES[0], address_bar_link, FAVORITES[1]]).get_json()
+
+    assert summary["already_saved"] == 2
+    assert looked_up == [FAVORITES[1]]
+    assert saved_urls(client) == [FAVORITES[0], FAVORITES[1]]
+
+
+def test_a_removed_recipe_can_be_imported_again(client):
+    recipe_id = import_chosen(client, [REEL]).get_json()["recipe_ids"][0]
+    client.delete(f"/api/recipes/{recipe_id}")
+    summary = import_chosen(client, [REEL]).get_json()
+    assert summary["already_saved"] == 0
+    assert len(summary["recipe_ids"]) == 1
+    assert saved_urls(client) == [REEL]
+
+
+def test_a_post_only_someone_else_saved_is_saved_for_you_too(client, other_client):
+    import_chosen(other_client, [REEL])
+    summary = import_chosen(client, [REEL]).get_json()
+    assert summary["already_saved"] == 0
+    assert saved_urls(client) == [REEL]
+
+
+def test_a_file_in_which_every_post_is_saved_already_is_still_a_normal_answer(client):
+    import_chosen(client, [REEL, POST])
+    response = import_chosen(client, [POST, REEL])
+    assert response.status_code == 200
+    assert response.get_json()["already_saved"] == 2
+    assert response.get_json()["recipe_ids"] == []

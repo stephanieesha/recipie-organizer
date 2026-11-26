@@ -44,6 +44,8 @@ const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 const reel = (i) => ({ url: 'https://www.instagram.com/reel/CODE' + i + '/', platform: 'instagram' });
 const reels = (count) => Array.from({ length: count }, (_, i) => reel(i + 1));
+// The same list with some of its recipes marked as saved already (counting from 1).
+const withSaved = (links, ...saved) => links.map((link, i) => ({ ...link, already_saved: saved.includes(i + 1) }));
 
 async function newPage() {
   const elements = {};
@@ -130,6 +132,8 @@ async function newPage() {
       panel: element('importPreview').style.display,
       summary: element('importSummary').innerHTML.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
       ticked: [...list.matchAll(/<input[^>]*>/g)].map((m) => /\bchecked\b/.test(m[0])),
+      locked: [...list.matchAll(/<input[^>]*>/g)].map((m) => /\bdisabled\b/.test(m[0])),
+      markedSaved: [...list.matchAll(/<label[\s\S]*?<\/label>/g)].map((m) => m[0].includes('already saved')),
       urls: [...list.matchAll(/<span class="import-url"[^>]*>([^<]*)<\/span>/g)].map((m) => m[1]),
       listHtml: list,
       importLabel: button.textContent,
@@ -180,6 +184,38 @@ SCENARIOS = r"""
 
   no_limit: async (page) => {
     await page.preview(reels(40), 0);
+    return page.view();
+  },
+
+  some_already_saved: async (page) => {
+    page.replies['/api/recipes/bulk-import'] = { status: 200, body: { recipe_ids: [1, 2, 3] } };
+    await page.preview(withSaved(reels(5), 2, 4), 25);
+    const view = page.view();
+    await page.click('importButton');
+    return { view, posts: page.posts };
+  },
+
+  saved_ones_do_not_count_toward_the_limit: async (page) => {
+    await page.preview(withSaved(reels(40), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 25);
+    const start = page.view();
+    await page.click('Select none');
+    await page.click('selectAllButton');
+    return { start, again: page.view() };
+  },
+
+  exactly_one_import_worth: async (page) => {
+    await page.preview(reels(25), 25);
+    return page.view();
+  },
+
+  few_enough_new_ones_for_one_import: async (page) => {
+    await page.preview(withSaved(reels(40), ...Array.from({ length: 20 }, (_, i) => i + 1)), 25);
+    return page.view();
+  },
+
+  everything_already_saved: async (page) => {
+    await page.preview(withSaved(reels(3), 1, 2, 3), 25);
+    await page.click('selectAllButton');
     return page.view();
   },
 
@@ -432,6 +468,64 @@ def test_with_no_limit_every_recipe_starts_ticked(screens):
     assert view["summary"] == "Found 40 recipes."
 
 
+def test_recipes_already_saved_are_marked_unticked_and_locked(screens):
+    view = screens["some_already_saved"]["view"]
+    assert view["markedSaved"] == [False, True, False, True, False]
+    assert view["ticked"] == [True, False, True, False, True]
+    assert view["locked"] == [False, True, False, True, False]
+    assert "import-saved" in view["listHtml"]
+
+
+def test_the_summary_says_how_many_are_already_saved_and_only_the_new_ones_are_counted(screens):
+    view = screens["some_already_saved"]["view"]
+    assert view["summary"] == "Found 5 recipes. 2 already saved."
+    assert view["importLabel"] == "Import 3 recipes"
+    assert view["importDisabled"] is False
+    assert view["selectAllLabel"] == "Select all"
+
+
+def test_only_the_new_recipes_are_sent_to_the_import(screens):
+    posts = screens["some_already_saved"]["posts"]
+    assert posts[1]["body"] == {"links": [reel(1), reel(3), reel(5)]}
+
+
+def test_saved_recipes_do_not_use_up_the_limit(screens):
+    start = screens["saved_ones_do_not_count_toward_the_limit"]["start"]
+    assert start["ticked"] == [False] * 10 + [True] * 25 + [False] * 5
+    assert start["importLabel"] == "Import 25 recipes"
+    assert start["summary"].startswith("Found 40 recipes. 10 already saved. You can import 25 at a time")
+    assert start["selectAllLabel"] == "Select first 25"
+
+
+def test_select_all_skips_the_saved_recipes_too(screens):
+    again = screens["saved_ones_do_not_count_toward_the_limit"]["again"]
+    assert again["ticked"] == [False] * 10 + [True] * 25 + [False] * 5
+
+
+def test_exactly_as_many_recipes_as_one_import_takes_is_not_a_long_list(screens):
+    view = screens["exactly_one_import_worth"]
+    assert view["ticked"] == [True] * 25
+    assert view["summary"] == "Found 25 recipes."
+    assert view["selectAllLabel"] == "Select all"
+    assert view["importDisabled"] is False
+
+
+def test_when_the_new_recipes_fit_in_one_import_there_is_no_limit_message(screens):
+    view = screens["few_enough_new_ones_for_one_import"]
+    assert view["ticked"] == [False] * 20 + [True] * 20
+    assert view["summary"] == "Found 40 recipes. 20 already saved."
+    assert view["selectAllLabel"] == "Select all"
+    assert view["importLabel"] == "Import 20 recipes"
+
+
+def test_when_everything_is_already_saved_there_is_nothing_to_import(screens):
+    view = screens["everything_already_saved"]
+    assert view["summary"] == "Found 3 recipes. 3 already saved. There is nothing new to import."
+    assert view["ticked"] == [False, False, False]
+    assert view["importLabel"] == "Import 0 recipes"
+    assert view["importDisabled"] is True
+
+
 def test_select_none_unticks_everything_and_stops_the_import(screens):
     none = screens["select_buttons"]["none"]
     assert none["ticked"] == [False] * 40
@@ -496,7 +590,7 @@ def test_an_import_with_the_connection_down_says_so_and_keeps_the_list(screens):
 
 def test_an_import_that_saves_nothing_new_stays_on_the_page(screens):
     view, gets = screens["import_saves_nothing_new"]["view"], screens["import_saves_nothing_new"]["gets"]
-    assert "Nothing new was saved." in view["message"]
+    assert "Nothing new was saved. Those recipes are already in your list." in view["message"]
     assert view["location"] is None
     assert view["panel"] == "none"
     assert view["chosenFile"] == ""

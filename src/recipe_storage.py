@@ -14,6 +14,8 @@ does not exist (RecipeNotFound).
 
 import json
 
+from url_utils import link_key
+
 
 class RecipeNotFound(Exception):
     pass
@@ -43,6 +45,21 @@ def add_recipe(conn, source_url: str, platform: str, caption_raw: str = None,
     )
     conn.commit()
     return get_recipe(conn, cursor.lastrowid)
+
+
+def saved_links(conn, user_id: int = None) -> dict:
+    """
+    The posts already saved as recipes, as {link_key: recipe id}. A post saved twice is listed with
+    its oldest recipe. Recipes whose link does not go to one post are left out.
+    """
+    owned, owner = _owned_by(user_id)
+    rows = conn.execute(f"SELECT id, source_url FROM recipes WHERE 1 = 1{owned} ORDER BY id", owner).fetchall()
+    saved = {}
+    for row in rows:
+        key = link_key(row["source_url"])
+        if key:
+            saved.setdefault(key, row["id"])
+    return saved
 
 
 def set_recipe_thumbnail(conn, recipe_id: int, thumbnail_url: str) -> dict:

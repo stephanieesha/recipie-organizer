@@ -152,6 +152,23 @@ def test_punctuation_after_a_link_is_not_part_of_it():
     assert urls(f"saved: {REEL}, and ({POST}).") == [REEL, POST]
 
 
+def test_the_same_post_written_two_ways_is_imported_once_with_the_first_way():
+    other_way = REEL.replace("/reel/", "/p/") + "?igsh=MXx4eWx"
+    assert urls(f"{REEL}\n{POST}\n{other_way}\n") == [REEL, POST]
+    assert urls(f"{other_way}\n{REEL}\n") == [other_way]
+
+
+def test_a_tiktok_video_written_two_ways_is_imported_once():
+    data_download = tiktok_link(7123456789)
+    address_bar = "https://www.tiktok.com/@chef/video/7123456789"
+    assert urls(f"{data_download}\n{address_bar}\n") == [data_download]
+
+
+def test_posts_whose_codes_differ_only_in_case_are_different_posts():
+    lower = REEL.replace("DQ6rx2JDxFR", "dq6rx2jdxfr")
+    assert urls(f"{REEL}\n{lower}\n") == [REEL, lower]
+
+
 def test_the_same_link_twice_is_imported_once():
     assert urls(f"{REEL}\n{POST}\n{REEL}\n") == [REEL, POST]
 

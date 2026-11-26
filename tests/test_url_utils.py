@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from url_utils import detect_platform, extract_urls_from_text, tiktok_web_link
+from url_utils import detect_platform, extract_urls_from_text, link_key, tiktok_web_link
 
 
 def test_detect_tiktok_standard_url():
@@ -169,3 +169,91 @@ def test_a_data_download_link_gets_its_ordinary_web_link(url):
 ])
 def test_any_other_link_has_no_such_web_link(url):
     assert tiktok_web_link(url) is None
+
+
+# ---------- which post a link goes to ----------
+
+SAME_POST = [
+    pytest.param("instagram:DQ6rx2JDxFR", [
+        "https://www.instagram.com/reel/DQ6rx2JDxFR/",
+        "https://www.instagram.com/p/DQ6rx2JDxFR/",
+        "https://www.instagram.com/tv/DQ6rx2JDxFR/",
+        "https://www.instagram.com/reels/DQ6rx2JDxFR/",
+        "https://www.instagram.com/chef_one/reel/DQ6rx2JDxFR/",
+        "https://www.instagram.com/chef.one/p/DQ6rx2JDxFR/",
+        "https://instagram.com/reel/DQ6rx2JDxFR",
+        "http://www.instagram.com/reel/DQ6rx2JDxFR/?igsh=MXx4eWx&utm_source=ig_web_copy_link",
+        "https://WWW.Instagram.com/REEL/DQ6rx2JDxFR/",
+        "https://m.instagram.com/p/DQ6rx2JDxFR/#comments",
+        "  https://www.instagram.com/reel/DQ6rx2JDxFR/  ",
+        "\u00a0https://www.instagram.com/reel/DQ6rx2JDxFR/\u00a0",
+    ], id="instagram post"),
+    pytest.param("instagram:share:BAbc123", [
+        "https://www.instagram.com/share/reel/BAbc123/",
+        "https://www.instagram.com/share/p/BAbc123/",
+        "https://www.instagram.com/share/BAbc123",
+        "https://www.instagram.com/share/reel/BAbc123/?igsh=x",
+    ], id="instagram share link"),
+    pytest.param("tiktok:7123456789", [
+        "https://www.tiktok.com/@chef/video/7123456789",
+        "https://www.tiktok.com/@other.chef/video/7123456789/",
+        "https://www.tiktok.com/@_/video/7123456789",
+        "https://www.tiktok.com/@chef/photo/7123456789",
+        "http://tiktok.com/@chef/video/7123456789?is_from_webapp=1&sender_device=pc",
+        "https://m.tiktok.com/v/7123456789.html",
+        "https://www.tiktokv.com/share/video/7123456789/",
+        "https://www.tiktokv.com/share/video/7123456789",
+        "HTTPS://WWW.TIKTOK.COM/@Chef/VIDEO/7123456789",
+    ], id="tiktok video"),
+    pytest.param("tiktok:vm.tiktok.com/ZMabcdef", [
+        "https://vm.tiktok.com/ZMabcdef/",
+        "http://VM.TikTok.com/ZMabcdef?x=1",
+    ], id="tiktok vm link"),
+    pytest.param("tiktok:vt.tiktok.com/ZSpv3EJdj", ["https://vt.tiktok.com/ZSpv3EJdj/"], id="tiktok vt link"),
+    pytest.param("tiktok:t/ZTabc123", ["https://www.tiktok.com/t/ZTabc123/", "https://tiktok.com/t/ZTabc123"], id="tiktok t link"),
+]
+
+
+@pytest.mark.parametrize("key, links", SAME_POST)
+def test_every_way_of_writing_a_link_to_one_post_gives_the_same_key(key, links):
+    assert [link_key(link) for link in links] == [key] * len(links)
+
+
+@pytest.mark.parametrize("one, other", [
+    ("https://www.instagram.com/reel/AbCdEf/", "https://www.instagram.com/reel/abcdef/"),
+    ("https://www.instagram.com/reel/AAA/", "https://www.instagram.com/reel/BBB/"),
+    ("https://www.instagram.com/share/reel/BAbc123/", "https://www.instagram.com/reel/BAbc123/"),
+    ("https://www.tiktok.com/@chef/video/7123456789", "https://www.tiktok.com/@chef/video/7123456780"),
+    ("https://vm.tiktok.com/ZMabcdef/", "https://vt.tiktok.com/ZMabcdef/"),
+    ("https://vm.tiktok.com/ZMabcdef/", "https://vm.tiktok.com/ZMABCDEF/"),
+    ("https://vm.tiktok.com/ZMabcdef/", "https://www.tiktok.com/t/ZMabcdef/"),
+    ("https://www.tiktok.com/@chef/video/7123456789", "https://vm.tiktok.com/7123456789/"),
+    ("https://www.instagram.com/reel/AAA/", "https://www.tiktok.com/t/AAA/"),
+])
+def test_links_to_different_posts_have_different_keys(one, other):
+    assert link_key(one) != link_key(other)
+
+
+@pytest.mark.parametrize("link", [
+    "https://www.instagram.com/chef_one/",
+    "https://www.instagram.com/explore/tags/jollof/",
+    "https://www.instagram.com/stories/chef_one/123/",
+    "https://www.instagram.com/reels/audio/1234567890/",
+    "https://www.instagram.com/",
+    "https://www.tiktok.com/@chef",
+    "https://www.tiktok.com/tag/jollof",
+    "https://www.tiktok.com/music/sound-123",
+    "https://www.tiktok.com/@chef/video/abc",
+    "https://vm.tiktok.com/",
+    "https://www.youtube.com/watch?v=abc123",
+    "https://www.instagram.com.evil.example/reel/abc123/",
+    "https://evil.example/?u=https://www.instagram.com/reel/abc123/",
+    "www.instagram.com/reel/abc123/",
+    "not a link",
+    "https://",
+    "http://[::1",
+    "",
+    "   ",
+])
+def test_a_link_that_does_not_go_to_one_post_has_no_key_and_never_raises(link):
+    assert link_key(link) is None

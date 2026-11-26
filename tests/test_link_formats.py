@@ -165,3 +165,70 @@ def test_a_tiktok_timeout_saves_the_link_and_explains(client, monkeypatch):
     assert saved["status"] == "needs_manual"
     assert saved["extraction_message"] == "The link is saved. TikTok took too long to answer."
     assert len(client.get("/api/recipes").get_json()) == 1
+
+
+# --- A link that is already saved ---------------------------------------------
+
+@pytest.fixture
+def other_client():
+    """A second person with an account of their own."""
+    other = app_module.app.test_client()
+    other.post("/signup", data={"email": "other@example.com", "password": "correct-horse"})
+    return other
+
+
+def test_a_link_that_is_already_saved_is_refused_and_points_to_the_saved_recipe(client):
+    first = paste(client, INSTAGRAM).get_json()
+    again = paste(client, INSTAGRAM)
+    assert again.status_code == 409
+    assert again.get_json() == {"error": "You already saved this recipe.", "existing_recipe_id": first["id"]}
+    assert len(client.get("/api/recipes").get_json()) == 1
+
+
+@pytest.mark.parametrize("again", [
+    "https://www.instagram.com/p/DQ6rx2JDxFR/",
+    "www.instagram.com/reel/DQ6rx2JDxFR/?igsh=MXx4eWx",
+    "Look at this recipe!\nhttps://instagram.com/reel/DQ6rx2JDxFR",
+    "https://www.instagram.com/chef_one/reel/DQ6rx2JDxFR/",
+])
+def test_the_same_instagram_post_pasted_another_way_is_refused_too(client, again):
+    first = paste(client, INSTAGRAM).get_json()
+    response = paste(client, again)
+    assert response.status_code == 409
+    assert response.get_json()["existing_recipe_id"] == first["id"]
+    assert len(client.get("/api/recipes").get_json()) == 1
+
+
+@pytest.mark.parametrize("again", [
+    "https://www.tiktokv.com/share/video/7123456789/",
+    "https://m.tiktok.com/v/7123456789.html",
+    "tiktok.com/@other/video/7123456789?lang=en",
+])
+def test_the_same_tiktok_video_pasted_another_way_is_refused_too(client, again):
+    first = paste(client, TIKTOK).get_json()
+    response = paste(client, again)
+    assert response.status_code == 409
+    assert response.get_json()["existing_recipe_id"] == first["id"]
+    assert len(client.get("/api/recipes").get_json()) == 1
+
+
+def test_a_link_saved_by_the_import_is_refused_when_pasted(client):
+    client.post("/api/recipes/bulk-import", json={"links": [INSTAGRAM]})
+    assert paste(client, INSTAGRAM).status_code == 409
+
+
+def test_a_different_post_is_saved(client):
+    assert paste(client, INSTAGRAM).status_code == 201
+    assert paste(client, "https://www.instagram.com/reel/DifferentOne/").status_code == 201
+    assert len(client.get("/api/recipes").get_json()) == 2
+
+
+def test_each_person_can_save_the_same_link(client, other_client):
+    assert paste(client, INSTAGRAM).status_code == 201
+    assert paste(other_client, INSTAGRAM).status_code == 201
+
+
+def test_a_removed_recipe_can_be_pasted_again(client):
+    recipe_id = paste(client, INSTAGRAM).get_json()["id"]
+    client.delete(f"/api/recipes/{recipe_id}")
+    assert paste(client, INSTAGRAM).status_code == 201

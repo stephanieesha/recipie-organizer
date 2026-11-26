@@ -11,7 +11,7 @@ from recipe_storage import (
     add_recipe, update_recipe_extracted, mark_recipe_needs_manual,
     update_recipe_manual, get_recipes, get_recipe, delete_recipe,
     set_recipe_thumbnail, set_recipe_category, get_recipes_by_category,
-    RecipeNotFound,
+    saved_links, RecipeNotFound,
 )
 
 
@@ -161,3 +161,42 @@ def test_get_recipes_by_category_empty_for_category_with_no_recipes(conn):
     from category_storage import add_category
     category = add_category(conn, "Empty")
     assert get_recipes_by_category(conn, category["id"]) == []
+
+
+# ---------- the posts a person has saved ----------
+
+def test_saved_links_lists_each_saved_post_by_what_it_goes_to(conn):
+    first = add_recipe(conn, "https://www.instagram.com/reel/AAA/", "instagram", user_id=1)
+    second = add_recipe(conn, "https://www.tiktok.com/@chef/video/123", "tiktok", user_id=1)
+    assert saved_links(conn, user_id=1) == {"instagram:AAA": first["id"], "tiktok:123": second["id"]}
+
+
+def test_saved_links_only_lists_that_persons_recipes(conn):
+    add_recipe(conn, "https://www.instagram.com/reel/AAA/", "instagram", user_id=1)
+    mine = add_recipe(conn, "https://www.instagram.com/reel/BBB/", "instagram", user_id=2)
+    assert saved_links(conn, user_id=2) == {"instagram:BBB": mine["id"]}
+
+
+def test_saved_links_without_a_person_lists_every_recipe(conn):
+    add_recipe(conn, "https://www.instagram.com/reel/AAA/", "instagram", user_id=1)
+    add_recipe(conn, "https://www.instagram.com/reel/BBB/", "instagram", user_id=2)
+    assert set(saved_links(conn)) == {"instagram:AAA", "instagram:BBB"}
+
+
+def test_a_post_saved_twice_is_listed_with_its_oldest_recipe(conn):
+    older = add_recipe(conn, "https://www.instagram.com/reel/AAA/", "instagram", user_id=1)
+    add_recipe(conn, "https://www.instagram.com/p/AAA/?igsh=1", "instagram", user_id=1)
+    assert saved_links(conn, user_id=1) == {"instagram:AAA": older["id"]}
+
+
+def test_saved_links_leaves_out_recipes_whose_link_is_not_one_post(conn):
+    add_recipe(conn, "https://www.instagram.com/chef_one/", "instagram", user_id=1)
+    add_recipe(conn, "not a link at all", "instagram", user_id=1)
+    add_recipe(conn, "", "instagram", user_id=1)
+    assert saved_links(conn, user_id=1) == {}
+
+
+def test_a_removed_recipe_is_no_longer_saved(conn):
+    recipe = add_recipe(conn, "https://www.instagram.com/reel/AAA/", "instagram", user_id=1)
+    delete_recipe(conn, recipe["id"], user_id=1)
+    assert saved_links(conn, user_id=1) == {}

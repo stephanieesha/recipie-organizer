@@ -28,6 +28,7 @@
     .import-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #F6DCE5; font-size: 12px; cursor: pointer; }
     .import-item input { flex: none; min-width: 0; width: 15px; height: 15px; padding: 0; margin: 0; }
     .import-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .import-saved { color: #7C5A67; cursor: default; }
     .error-box { background: #F4DEDC; border: 1px solid #DDB3AE; color: #7A2E24; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
     .success-box { background: #DEE9DC; border: 1px solid #B3C9AE; color: #2E4A2E; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
     .info-box { background: #F6DCE5; border: 1px solid #EBC9D6; color: #68012D; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
@@ -89,7 +90,7 @@
             <button class="secondary" onclick="cancelPreview()">Cancel</button>
           </div>
         </div>
-        <p style="font-size:11px; color:#7C5A67;">Choose a file and press Preview to see what is in it. Nothing is saved until you press Import.</p>
+        <p style="font-size:11px; color:#7C5A67;">Choose a file and press Preview to see what is in it. Recipes you have already saved are marked and are not saved again. Nothing is saved until you press Import.</p>
         <p style="font-size:11px; color:#7C5A67;">Instagram: in the app, open Settings, then Accounts Center, Your information and permissions, Download your information. Choose JSON as the format, then upload the saved_posts.json file from the download. Instagram posts are added without a caption, so you paste each caption in afterward.</p>
         <p style="font-size:11px; color:#7C5A67;">TikTok: in the app, open Profile, then the menu, Settings and privacy, Account, Download your data. Choose JSON as the file format, wait for TikTok to prepare it (this can take a few days), then upload the user_data.json file from the download. Only your favorites, the videos you saved with the bookmark button, are imported, not your likes or watch history. TikTok videos are filled in automatically.</p>
         <p style="font-size:11px; color:#7C5A67;">A text file with one link per line works too.</p>
@@ -280,30 +281,38 @@
     function renderImportPreview() {
       document.getElementById('importPreview').style.display = importLinks.length > 0 ? 'block' : 'none';
       document.getElementById('importList').innerHTML = importLinks.map((link, i) => `
-        <label class="import-item">
-          <input type="checkbox" ${importChosen.has(i) ? 'checked' : ''} onchange="toggleImport(${i})">
+        <label class="import-item ${link.already_saved ? 'import-saved' : ''}">
+          <input type="checkbox" ${importChosen.has(i) ? 'checked' : ''} ${link.already_saved ? 'disabled' : ''} onchange="toggleImport(${i})">
           <span class="status-tag status-pending">${esc(link.platform)}</span>
           <span class="import-url" title="${esc(link.url)}">${esc(link.url)}</span>
+          ${link.already_saved ? '<span class="status-tag status-extracted">already saved</span>' : ''}
         </label>
       `).join('');
       updateImportControls();
     }
 
-    // How many recipes can be ticked at once: all of them, or the most one import allows.
-    function importCap() {
-      return importLimit > 0 ? Math.min(importLimit, importLinks.length) : importLinks.length;
+    // The recipes in the list that are not saved yet, which are the only ones that can be imported.
+    function newLinkIndexes() {
+      return importLinks.map((link, i) => i).filter((i) => !importLinks[i].already_saved);
     }
 
     function updateImportControls() {
       const count = importChosen.size;
       const tooMany = importLimit > 0 && count > importLimit;
       const found = importLinks.length;
-      const capped = importCap() < found;
+      const fresh = newLinkIndexes().length;
+      const capped = importLimit > 0 && fresh > importLimit;
       let summary = `Found ${found} ${found === 1 ? 'recipe' : 'recipes'}.`;
+      if (fresh < found) {
+        summary += ` ${found - fresh} already saved.`;
+      }
+      if (fresh === 0) {
+        summary += ' There is nothing new to import.';
+      }
       if (capped) {
         summary += ` You can import ${importLimit} at a time, so the first ${importLimit} are ticked. Untick some and tick others to choose different ones.`;
       }
-      document.getElementById('selectAllButton').textContent = capped ? `Select first ${importCap()}` : 'Select all';
+      document.getElementById('selectAllButton').textContent = capped ? `Select first ${importLimit}` : 'Select all';
       let html = `<div class="info-box">${esc(summary)}</div>`;
       if (tooMany) {
         html += `<div class="error-box">${esc(`You can import ${importLimit} at a time. Untick ${count - importLimit} to continue.`)}</div>`;
@@ -324,7 +333,9 @@
     }
 
     function selectImport(which) {
-      importChosen = new Set(which === 'all' ? importLinks.slice(0, importCap()).map((link, i) => i) : []);
+      let chosen = which === 'all' ? newLinkIndexes() : [];
+      if (importLimit > 0) chosen = chosen.slice(0, importLimit);
+      importChosen = new Set(chosen);
       renderImportPreview();
     }
 
@@ -394,7 +405,7 @@
         messageBox.innerHTML = `<div class="success-box">Saved ${saved.length} ${saved.length === 1 ? 'recipe' : 'recipes'} - taking you to review and categorize them...</div>`;
         window.location.href = `/bulk-review?ids=${saved.join(',')}`;
       } else {
-        messageBox.innerHTML = '<div class="info-box">Nothing new was saved.</div>';
+        messageBox.innerHTML = '<div class="info-box">Nothing new was saved. Those recipes are already in your list.</div>';
         loadRecipes();
       }
     }
