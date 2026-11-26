@@ -21,7 +21,8 @@ from flask_login import LoginManager, UserMixin, current_user, login_required, l
 from db import get_connection, init_db
 from limits import client_ip, max_bulk_links, too_many_auth_attempts, too_many_requests, use_ai_call, use_signup
 from auth import create_user, authenticate_user, get_user_by_id, EmailAlreadyExists, InvalidCredentials
-from url_utils import detect_platform, extract_urls_from_text, find_recipe_link
+from url_utils import detect_platform, find_recipe_link
+from import_parser import MAX_UPLOAD_BYTES, ImportFileError, read_export
 from tiktok_oembed import fetch_tiktok_data, TikTokFetchError
 from recipe_extractor import extract_recipe, NoRecipeFoundError, ExtractionError
 from recipe_storage import (
@@ -46,6 +47,8 @@ if os.environ.get("RENDER") or os.environ.get("PRODUCTION", "").lower() == "true
     app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_HTTPONLY"] = True
+# A bigger upload is refused before the server has read all of it.
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
 init_db()
 
@@ -97,6 +100,11 @@ def limit_requests_per_visitor():
 def keep_out_of_search_engines(response):
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
     return response
+
+
+@app.errorhandler(413)
+def upload_too_big(error):
+    return jsonify({"error": f"That file is too big to import (the limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)"}), 413
 
 
 @app.route("/robots.txt")
@@ -391,26 +399,17 @@ def bulk_import():
         return jsonify({"error": "No file selected"}), 400
 
     try:
-        text = uploaded.read().decode("utf-8", errors="ignore")
-    except Exception as e:
-        return jsonify({"error": f"Could not read this file: {e}"}), 400
-
-    urls = extract_urls_from_text(text)
-    if not urls:
-        return jsonify({"error": "No TikTok or Instagram links found in this file"}), 422
-    if max_bulk_links() and len(urls) > max_bulk_links():
+        links = read_export(uploaded.read().decode("utf-8", errors="ignore"))
+    except ImportFileError as e:
+        return jsonify({"error": str(e)}), 422
+    if max_bulk_links() and len(links) > max_bulk_links():
         return jsonify({"error": f"Too many links in one import (the limit is {max_bulk_links()})"}), 400
 
     conn = get_connection()
-    summary = {"total_found": len(urls), "extracted": 0, "needs_caption": 0, "needs_manual": 0, "skipped": 0, "recipe_ids": []}
+    summary = {"total_found": len(links), "extracted": 0, "needs_caption": 0, "needs_manual": 0, "recipe_ids": []}
     try:
-        for url in urls:
-            try:
-                platform = detect_platform(url)
-            except ValueError:
-                summary["skipped"] += 1
-                continue
-
+        for link in links:
+            url, platform = link["url"], link["platform"]
             recipe = add_recipe(conn, url, platform, user_id=_user_id())
             summary["recipe_ids"].append(recipe["id"])
 
