@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from url_utils import detect_platform, extract_urls_from_text
+from url_utils import detect_platform, extract_urls_from_text, tiktok_web_link
 
 
 def test_detect_tiktok_standard_url():
@@ -18,6 +18,21 @@ def test_detect_tiktok_short_url():
 
 def test_detect_tiktok_vt_short_url():
     assert detect_platform("https://vt.tiktok.com/ZSpv3EJdj/") == "tiktok"
+
+
+def test_detect_tiktokv_share_url():
+    assert detect_platform("https://www.tiktokv.com/share/video/7123456789/") == "tiktok"
+
+
+@pytest.mark.parametrize("url", [
+    "https://tiktokv.com.evil.example/share/video/1",
+    "https://nottiktokv.com/share/video/1",
+    "https://tiktokvx.com/share/video/1",
+    "https://www.tiktokvv.com/share/video/1",
+])
+def test_detect_rejects_addresses_that_only_look_like_tiktokv(url):
+    with pytest.raises(ValueError):
+        detect_platform(url)
 
 
 def test_detect_instagram_reel():
@@ -95,6 +110,8 @@ from url_utils import find_recipe_link  # noqa: E402
     ("Check out this video https://vt.tiktok.com/ZSabc/ via TikTok", "https://vt.tiktok.com/ZSabc/"),
     ("see (https://www.tiktok.com/@user/video/123).", "https://www.tiktok.com/@user/video/123"),
     ("HTTPS://WWW.TIKTOK.COM/@user/video/1", "HTTPS://WWW.TIKTOK.COM/@user/video/1"),
+    ("https://www.tiktokv.com/share/video/7123456789/", "https://www.tiktokv.com/share/video/7123456789/"),
+    ("tiktokv.com/share/video/7123456789/", "https://tiktokv.com/share/video/7123456789/"),
     ("https://www.tiktok.com/@u/video/1 https://www.tiktok.com/@u/video/1", "https://www.tiktok.com/@u/video/1"),
 ])
 def test_find_recipe_link_returns_the_one_link(text, expected):
@@ -110,6 +127,10 @@ def test_find_recipe_link_returns_the_one_link(text, expected):
     "https://nottiktok.com/@chef/video/1",
     "https://evil.example/?u=https://www.tiktok.com/@chef/video/1",
     "https://evil.example/?u=tiktok.com/@chef/video/1",
+    "https://tiktokv.com.evil.example/share/video/1",
+    "https://nottiktokv.com/share/video/1",
+    "https://tiktokvv.com/share/video/1",
+    "https://evil.example/?u=https://www.tiktokv.com/share/video/1",
 ])
 def test_find_recipe_link_refuses_text_without_a_real_link(text):
     with pytest.raises(ValueError, match="TikTok or Instagram video, reel or post"):
@@ -119,3 +140,32 @@ def test_find_recipe_link_refuses_text_without_a_real_link(text):
 def test_find_recipe_link_refuses_two_different_links():
     with pytest.raises(ValueError, match="one link at a time"):
         find_recipe_link("https://www.tiktok.com/@u/video/1 https://www.instagram.com/reel/ABC/")
+
+
+# --- tiktok_web_link: the ordinary link for a link from TikTok's data download ----
+
+@pytest.mark.parametrize("url", [
+    "https://www.tiktokv.com/share/video/7123456789/",
+    "https://www.tiktokv.com/share/video/7123456789",
+    "https://m.tiktokv.com/share/video/7123456789/?x=1",
+    "https://www.tiktok.com/share/video/7123456789/",
+    "  https://www.tiktokv.com/share/video/7123456789/  ",
+    "HTTPS://WWW.TIKTOKV.COM/SHARE/VIDEO/7123456789/",
+])
+def test_a_data_download_link_gets_its_ordinary_web_link(url):
+    assert tiktok_web_link(url) == "https://www.tiktok.com/@_/video/7123456789"
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.tiktok.com/@chef/video/7123456789",
+    "https://vt.tiktok.com/ZSabc/",
+    "https://www.tiktokv.com/share/video/abc/",
+    "https://www.tiktokv.com/share/user/7123456789/",
+    "https://www.tiktokv.com/share/7123456789/",
+    "https://www.instagram.com/share/video/7123456789/",
+    "https://evil.example/share/video/7123456789/",
+    "https://tiktokv.com.evil.example/share/video/7123456789/",
+    "",
+])
+def test_any_other_link_has_no_such_web_link(url):
+    assert tiktok_web_link(url) is None

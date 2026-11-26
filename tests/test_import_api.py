@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import app as app_module  # noqa: E402
 import db  # noqa: E402
 import limits  # noqa: E402
-from import_parser import NO_LINKS, NO_POSTS  # noqa: E402
+from import_parser import NO_FAVORITES, NO_LINKS, NO_POSTS, TIKTOK_TEXT_FILE  # noqa: E402
 from tiktok_oembed import TikTokFetchError  # noqa: E402
 
 REEL = "https://www.instagram.com/reel/DQ6rx2JDxFR/"
@@ -179,3 +179,75 @@ def test_a_file_just_under_the_size_limit_is_accepted(client, monkeypatch):
 def test_the_upload_limit_is_fifty_megabytes():
     assert app_module.MAX_UPLOAD_BYTES == 50 * 1024 * 1024
     assert app_module.app.config["MAX_CONTENT_LENGTH"] == app_module.MAX_UPLOAD_BYTES
+
+
+# ---------- TikTok's data download ----------
+
+def share_link(video_id):
+    return f"https://www.tiktokv.com/share/video/{video_id}/"
+
+
+FAVORITES = [share_link(7100000000000000001 + i) for i in range(3)]
+LIKES = [share_link(7200000000000000001 + i) for i in range(2)]
+HISTORY = [share_link(7300000000000000001 + i) for i in range(4)]
+
+
+def tiktok_data(favorites, likes=(), history=()):
+    def entries(links):
+        return [{"Date": "2023-05-01 10:00:00", "Link": link} for link in links]
+
+    return json.dumps({"Activity": {
+        "Favorite Videos": {"FavoriteVideoList": entries(favorites)},
+        "Like List": {"ItemFavoriteList": entries(likes)},
+        "Video Browsing History": {"VideoList": entries(history)},
+    }}, indent=2)
+
+
+def test_only_the_favorites_in_a_tiktok_data_file_are_saved(client):
+    summary = upload(client, tiktok_data(FAVORITES, LIKES, HISTORY), "user_data.json").get_json()
+    assert summary["total_found"] == 3
+    assert saved_urls(client) == FAVORITES
+    assert {r["platform"] for r in client.get("/api/recipes").get_json()} == {"tiktok"}
+
+
+def test_each_favorite_is_looked_up_and_its_recipe_filled_in(client, monkeypatch):
+    looked_up = []
+
+    def fake_lookup(url):
+        looked_up.append(url)
+        return {"caption": "Garlic bread: butter, garlic, bread", "thumbnail_url": "https://example.com/cover.jpg"}
+
+    def fake_extraction(caption):
+        return {"title": "Garlic bread", "ingredients": ["butter", "garlic", "bread"], "directions": ["Mix", "Bake"]}
+
+    monkeypatch.setattr(app_module, "fetch_tiktok_data", fake_lookup)
+    monkeypatch.setattr(app_module, "extract_recipe", fake_extraction)
+
+    summary = upload(client, tiktok_data(FAVORITES, LIKES, HISTORY), "user_data.json").get_json()
+
+    assert summary["extracted"] == 3
+    assert looked_up == FAVORITES  # the links as the file has them; the lookup works out the web link itself
+    recipes = client.get("/api/recipes").get_json()
+    assert {r["title"] for r in recipes} == {"Garlic bread"}
+    assert {r["thumbnail_url"] for r in recipes} == {"https://example.com/cover.jpg"}
+
+
+def test_a_tiktok_data_file_without_favorites_is_explained_and_nothing_is_saved(client):
+    response = upload(client, tiktok_data([], LIKES, HISTORY), "user_data.json")
+    assert response.status_code == 422
+    assert response.get_json() == {"error": NO_FAVORITES}
+    assert saved_urls(client) == []
+
+
+def test_a_tiktok_data_file_in_text_form_is_explained_and_nothing_is_saved(client):
+    text = "Video Browsing History\nLink: " + HISTORY[0] + "\n"
+    response = upload(client, text, "user_data.txt")
+    assert response.status_code == 422
+    assert response.get_json() == {"error": TIKTOK_TEXT_FILE}
+    assert saved_urls(client) == []
+
+
+def test_a_tiktok_link_that_is_not_a_video_is_not_saved(client):
+    summary = upload(client, f"https://www.tiktok.com/@chef\n{FAVORITES[0]}\nhttps://www.tiktok.com/tag/jollof\n", "links.txt").get_json()
+    assert summary["total_found"] == 1
+    assert saved_urls(client) == [FAVORITES[0]]

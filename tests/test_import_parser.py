@@ -12,12 +12,19 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from import_parser import NO_LINKS, NO_POSTS, ImportFileError, read_export  # noqa: E402
+from import_parser import (  # noqa: E402
+    NO_FAVORITES, NO_LINKS, NO_POSTS, TIKTOK_TEXT_FILE, TIKTOK_UNREADABLE, ImportFileError, read_export,
+)
 from url_utils import is_post_link  # noqa: E402
 
 REEL = "https://www.instagram.com/reel/DQ6rx2JDxFR/"
 POST = "https://www.instagram.com/p/fA9uwTtkSN/"
 TV = "https://www.instagram.com/tv/CxYz123abc/"
+
+
+def tiktok_link(video_id):
+    """A link written the way TikTok's own data download writes them."""
+    return f"https://www.tiktokv.com/share/video/{video_id}/"
 
 
 def urls(text):
@@ -251,3 +258,214 @@ def test_the_error_is_a_value_error_so_callers_can_catch_either():
 def test_a_long_file_is_read_quickly():
     hrefs = [f"https://www.instagram.com/reel/C{i:010d}/" for i in range(20000)]
     assert urls(saved_posts_json(*hrefs)) == hrefs
+
+
+# ---------- TikTok's data download: only the favorites ----------
+
+def tiktok_data(favorites=(), likes=(), history=(), indent=2, favorites_key="Favorite Videos", link_key="Link"):
+    """The shape of TikTok's user_data.json, where the favorites sit next to the likes and the watch history."""
+    def entries(links, key):
+        return [{"Date": f"2023-05-{i + 1:02d} 10:00:00", key: link} for i, link in enumerate(links)]
+
+    activity = {
+        "Favorite Effects": {"FavoriteEffectsList": [{"Date": "2023-01-01 10:00:00", "EffectLink": "https://www.tiktok.com/effect/1"}]},
+        favorites_key: {"FavoriteVideoList": entries(favorites, link_key)},
+        "Like List": {"ItemFavoriteList": entries(likes, "link")},
+        "Video Browsing History": {"VideoList": entries(history, "VideoLink")},
+    }
+    return json.dumps({"Profile": {"Profile Information": {"ProfileMap": {"userName": "cook"}}}, "Activity": activity}, indent=indent)
+
+
+FAVORITES = [tiktok_link(7100000000000000001 + i) for i in range(3)]
+LIKES = [tiktok_link(7200000000000000001 + i) for i in range(4)]
+HISTORY = [tiktok_link(7300000000000000001 + i) for i in range(5)]
+
+
+def test_only_the_favorites_are_imported_not_the_likes_or_the_watch_history():
+    assert urls(tiktok_data(FAVORITES, LIKES, HISTORY)) == FAVORITES
+
+
+def test_each_favorite_is_a_tiktok_link():
+    assert read_export(tiktok_data(FAVORITES[:1], LIKES, HISTORY)) == [{"url": FAVORITES[0], "platform": "tiktok"}]
+
+
+def test_the_favorites_of_a_file_on_one_line_are_read_too():
+    assert urls(tiktok_data(FAVORITES, LIKES, HISTORY, indent=None)) == FAVORITES
+
+
+def test_the_british_spelling_of_the_section_is_read_too():
+    assert urls(tiktok_data(FAVORITES, LIKES, HISTORY, favorites_key="Favourite Videos")) == FAVORITES
+
+
+@pytest.mark.parametrize("link_key", ["Link", "link", "VideoLink"])
+def test_the_name_of_the_link_field_does_not_matter(link_key):
+    assert urls(tiktok_data(FAVORITES, LIKES, HISTORY, link_key=link_key)) == FAVORITES
+
+
+@pytest.mark.parametrize("key", ["FavoriteVideoList", "FavouriteVideoList", "Favorite Videos", "Favourite Videos"])
+def test_the_favorites_are_found_under_any_of_the_names_tiktok_uses(key):
+    text = json.dumps({"Activity": {key: [{"Link": FAVORITES[0]}], "Like List": {"ItemFavoriteList": [{"link": LIKES[0]}]}}})
+    assert urls(text) == [FAVORITES[0]]
+
+
+def test_favorites_in_more_than_one_place_in_the_file_are_all_read():
+    text = json.dumps({"One": {"Favorite Videos": [{"Link": FAVORITES[0]}]}, "Two": {"Favorite Videos": [{"Link": FAVORITES[1]}]}})
+    assert urls(text) == FAVORITES[:2]
+
+
+def test_favorites_come_out_in_the_order_they_are_in_the_file():
+    text = json.dumps({"Favorite Videos": {"A": [FAVORITES[0], {"x": FAVORITES[1], "y": FAVORITES[2]}], "B": [{"z": LIKES[0]}]}})
+    assert urls(text) == [FAVORITES[0], FAVORITES[1], FAVORITES[2], LIKES[0]]
+
+
+def test_a_favorite_that_is_also_in_the_likes_is_still_imported_once():
+    assert urls(tiktok_data(FAVORITES + FAVORITES[:1], FAVORITES, FAVORITES)) == FAVORITES
+
+
+def test_links_that_are_not_videos_are_left_out_of_the_favorites():
+    profile, tag, sound = "https://www.tiktok.com/@chef", "https://www.tiktok.com/tag/jollof", "https://www.tiktok.com/music/Sound-123"
+    assert urls(tiktok_data([profile, FAVORITES[0], tag, sound, FAVORITES[1]])) == FAVORITES[:2]
+
+
+def test_escaped_slashes_in_the_favorites_are_decoded():
+    text = '{"Activity": {"Favorite Videos": {"FavoriteVideoList": [{"Link": "https:\\/\\/www.tiktokv.com\\/share\\/video\\/7100000000000000001\\/"}]}}}'
+    assert urls(text) == [FAVORITES[0]]
+
+
+def test_the_favorites_are_found_when_the_file_is_cut_off_after_them():
+    whole = tiktok_data(FAVORITES, LIKES, HISTORY)
+    cut = whole[: whole.index(HISTORY[2])]  # the watch history is cut off part way
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(cut)
+    assert urls(cut) == FAVORITES
+
+
+def test_a_file_cut_off_inside_the_favorites_is_explained():
+    whole = tiktok_data(FAVORITES, LIKES, HISTORY)
+    cut = whole[: whole.index(FAVORITES[1])]
+    with pytest.raises(ImportFileError) as error:
+        read_export(cut)
+    assert str(error.value) == TIKTOK_UNREADABLE
+
+
+def test_favorites_nested_too_deeply_to_read_are_explained_not_crashed_on():
+    with pytest.raises(ImportFileError) as error:
+        read_export('{"Favorite Videos": ' + "[" * 100000)
+    assert str(error.value) == TIKTOK_UNREADABLE
+
+
+@pytest.mark.parametrize("empty", [
+    tiktok_data([], LIKES, HISTORY),
+    '{"Activity": {"Favorite Videos": {}, "Like List": {"ItemFavoriteList": []}}}',
+    '{"Activity": {"Favorite Videos": []}}',
+    '{"Activity": {"Favorite Videos": {"FavoriteVideoList": [{"Date": "2023-05-01 10:00:00"}]}}}',
+])
+def test_a_tiktok_file_without_favorites_says_so_and_does_not_import_the_likes(empty):
+    with pytest.raises(ImportFileError) as error:
+        read_export(empty)
+    assert str(error.value) == NO_FAVORITES
+
+
+@pytest.mark.parametrize("without", [
+    json.dumps({"Activity": {"Like List": {"ItemFavoriteList": [{"link": LIKES[0]}]}, "Video Browsing History": {"VideoList": []}}}),
+    json.dumps({"ItemFavoriteList": [{"link": LIKES[0]}]}),
+    json.dumps({"Like List": {"anything": [{"link": LIKES[0]}]}}),
+    json.dumps({"Video Browsing History": {"VideoList": [{"VideoLink": HISTORY[0]}]}}),
+])
+def test_a_tiktok_file_with_no_favorites_section_at_all_says_so(without):
+    with pytest.raises(ImportFileError) as error:
+        read_export(without)
+    assert str(error.value) == NO_FAVORITES
+
+
+def test_a_tiktok_data_file_in_text_form_is_explained_and_its_links_are_not_imported():
+    text = "Activity\n  Favorite Videos\n    Date: 2023-05-01 10:00:00\n    Link: " + FAVORITES[0] + "\n  Video Browsing History\n    Link: " + HISTORY[0] + "\n"
+    with pytest.raises(ImportFileError) as error:
+        read_export(text)
+    assert str(error.value) == TIKTOK_TEXT_FILE
+
+
+@pytest.mark.parametrize("title", ["My Favorite Videos", "Like List", "My Favorite Videos: Like List"])
+def test_a_title_in_someones_own_list_does_not_make_it_a_tiktok_data_file(title):
+    text = f"{title}\n{FAVORITES[0]}\n{FAVORITES[1]}\n"
+    assert urls(text) == FAVORITES[:2]
+
+
+def test_a_huge_watch_history_is_not_read_and_the_favorites_still_are():
+    history = [tiktok_link(7300000000000000000 + i) for i in range(150000)]
+    text = tiktok_data(FAVORITES, LIKES, history, indent=None)
+    assert len(text) > 15_000_000
+    assert urls(text) == FAVORITES
+
+
+def test_a_tiktok_link_list_in_a_plain_text_file_is_read_like_any_list():
+    assert urls("\n".join(FAVORITES)) == FAVORITES
+
+
+# ---------- TikTok links: which ones are videos ----------
+
+TIKTOK_POSTS = [
+    "https://www.tiktok.com/@chef/video/7123456789",
+    "https://www.tiktok.com/@chef.one_2/video/7123456789?is_from_webapp=1&sender_device=pc",
+    "https://www.tiktok.com/@chef/photo/7123456789",
+    "https://www.tiktok.com/@_/video/7123456789",
+    "https://m.tiktok.com/v/7123456789.html",
+    "https://www.tiktok.com/t/ZTabc123/",
+    "https://vm.tiktok.com/ZMabcdef/",
+    "https://vt.tiktok.com/ZSpv3EJdj/",
+    "https://vt.tiktok.com/ZS-pv_3EJdj",
+    "https://www.tiktokv.com/share/video/7123456789/",
+    "https://m.tiktokv.com/share/video/7123456789",
+    "https://www.tiktok.com/share/video/7123456789",
+    "HTTPS://WWW.TIKTOK.COM/@Chef/VIDEO/7123456789",
+]
+TIKTOK_NOT_POSTS = [
+    "https://www.tiktok.com/@chef",
+    "https://www.tiktok.com/@chef/",
+    "https://www.tiktok.com/@chef/video/",
+    "https://www.tiktok.com/@chef/video/abc",
+    "https://www.tiktok.com/@/video/7123456789",
+    "https://www.tiktok.com/discover/@chef/video/7123456789",
+    "https://vt.tiktok.com/?ref=share",
+    "https://www.tiktok.com/@chef/collection/Dinners-7123456789",
+    "https://www.tiktok.com/tag/jollof",
+    "https://www.tiktok.com/music/Original-Sound-7123456789",
+    "https://www.tiktok.com/discover",
+    "https://www.tiktok.com/foryou",
+    "https://www.tiktok.com/live",
+    "https://www.tiktok.com/",
+    "https://vm.tiktok.com/",
+    "https://www.tiktok.com/ZMabcdef/",
+    "https://www.tiktokv.com/share/user/123456",
+    "https://www.tiktokv.com/",
+]
+
+
+@pytest.mark.parametrize("link", TIKTOK_POSTS)
+def test_these_are_tiktok_video_links(link):
+    assert is_post_link(link)
+
+
+@pytest.mark.parametrize("link", TIKTOK_NOT_POSTS)
+def test_these_are_not_tiktok_video_links(link):
+    assert not is_post_link(link)
+
+
+@pytest.mark.parametrize("link", TIKTOK_POSTS[:-1])
+def test_a_list_of_links_keeps_the_videos_and_drops_the_rest(link):
+    mixed = "\n".join([TIKTOK_NOT_POSTS[0], link, TIKTOK_NOT_POSTS[5]])
+    assert urls(mixed) == [link]
+
+
+@pytest.mark.parametrize("text", [
+    "https://tiktokv.com.evil.example/share/video/7123456789/",
+    "https://nottiktokv.com/share/video/7123456789/",
+    "https://tiktokvx.com/share/video/7123456789/",
+    "https://tiktokvv.com/share/video/7123456789/",
+    "https://evil.example/?u=https://www.tiktokv.com/share/video/7123456789/",
+    "https://evil.example/foo.tiktokv.com/share/video/7123456789/",
+])
+def test_a_link_to_another_address_that_mentions_tiktokv_is_not_imported(text):
+    with pytest.raises(ImportFileError) as error:
+        read_export(text)
+    assert str(error.value) == NO_LINKS
